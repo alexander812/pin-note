@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Демо для PinNote</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #080a0f;
+        --panel: #11151d;
+        --border: rgba(255, 255, 255, 0.1);
+        --text: #eef2f8;
+        --muted: #97a1b4;
+        --accent: #7ee2b8;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          radial-gradient(circle at 15% 0%, rgba(126, 226, 184, 0.14), transparent 34rem),
+          radial-gradient(circle at 85% 20%, rgba(121, 147, 255, 0.12), transparent 32rem),
+          var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .page {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 56px 0 80px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding-bottom: 42px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        background: var(--accent);
+        color: #06251a;
+        font-size: 13px;
+      }
+      .nav {
+        display: flex;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .nav a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .nav a:hover {
+        color: var(--text);
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+        gap: 48px;
+        align-items: center;
+        padding: 42px 0 76px;
+      }
+      .eyebrow {
+        margin-bottom: 18px;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 750;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      h1 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(48px, 8vw, 92px);
+        line-height: 0.95;
+        letter-spacing: -0.06em;
+      }
+      h1 span {
+        color: var(--muted);
+      }
+      .lead {
+        max-width: 560px;
+        margin: 26px 0 30px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.6;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .button {
+        min-height: 42px;
+        padding: 0 18px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--panel);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+      .button-primary {
+        border-color: transparent;
+        background: var(--accent);
+        color: #06251a;
+        font-weight: 700;
+      }
+      .button:active {
+        transform: translateY(1px);
+      }
+      .preview {
+        position: relative;
+        min-height: 330px;
+        padding: 22px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        background:
+          linear-gradient(160deg, rgba(255, 255, 255, 0.06), transparent 50%),
+          var(--panel);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+      }
+      .preview::before {
+        content: "";
+        position: absolute;
+        right: -70px;
+        top: -95px;
+        width: 280px;
+        height: 280px;
+        border-radius: 50%;
+        background: rgba(126, 226, 184, 0.18);
+        filter: blur(10px);
+      }
+      .preview-label {
+        position: relative;
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .preview-value {
+        position: relative;
+        margin-top: 46px;
+        font-size: 62px;
+        font-weight: 750;
+        letter-spacing: -0.06em;
+      }
+      .preview-caption {
+        position: relative;
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .preview-bar {
+        position: absolute;
+        right: 22px;
+        bottom: 22px;
+        left: 22px;
+        height: 7px;
+        overflow: hidden;
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .preview-bar span {
+        display: block;
+        width: 68%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+      }
+      .section-title {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 22px;
+      }
+      .section-title h2 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: -0.04em;
+      }
+      .section-title p {
+        max-width: 420px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+      .card {
+        padding: 22px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+      .card-index {
+        color: var(--accent);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
+      .card h3 {
+        margin: 34px 0 8px;
+        font-size: 19px;
+        letter-spacing: -0.02em;
+      }
+      .card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        margin-top: 70px;
+        padding-top: 22px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      @media (max-width: 760px) {
+        .page {
+          width: min(100% - 24px, 560px);
+          padding-top: 28px;
+        }
+        header {
+          padding-bottom: 20px;
+        }
+        .nav {
+          display: none;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 30px;
+          padding-top: 24px;
+        }
+        .preview {
+          min-height: 250px;
+        }
+        .cards {
+          grid-template-columns: 1fr;
+        }
+        .section-title {
+          display: block;
+        }
+        .section-title p {
+          margin-top: 8px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div class="brand">
+          <span class="brand-mark">PN</span>
+          <span>PinNote</span>
+        </div>
+        <nav class="nav" aria-label="Демо-навигация">
+          <a href="#features">Возможности</a>
+          <a href="#workflow">Процесс</a>
+          <a href="#contact">Контакты</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" id="hero">
+          <div>
+            <div class="eyebrow">Демо-страница</div>
+            <h1 id="hero-title">Кликай. <span>Комментируй.</span> Исправляй.</h1>
+            <p class="lead" id="hero-lead">
+              Это тестовая страница для review-режима. Включи комментирование, кликни по любому
+              элементу и оставь правку — она попадёт в структурированный файл для AI-агента.
+            </p>
+            <div class="actions">
+              <button class="button button-primary" id="primary-action" type="button">Попробовать</button>
+              <button class="button" id="secondary-action" type="button">Посмотреть процесс</button>
+            </div>
+          </div>
+          <aside class="preview" id="preview-card" aria-label="Пример метрики">
+            <div class="preview-label">Открытых комментариев</div>
+            <div class="preview-value" id="preview-value">0</div>
+            <div class="preview-caption">после первого клика</div>
+            <div class="preview-bar"><span></span></div>
+          </aside>
+        </section>
+
+        <section id="features">
+          <div class="section-title">
+            <h2>Что можно прокомментировать</h2>
+            <p>Любой DOM-элемент: текст, кнопку, карточку, отступы или целую секцию.</p>
+          </div>
+          <div class="cards">
+            <article class="card" id="card-copy">
+              <div class="card-index">01</div>
+              <h3>Тексты</h3>
+              <p>Поправь заголовок, описание или подпись. В комментарий можно вставить готовую формулировку.</p>
+            </article>
+            <article class="card" id="card-layout">
+              <div class="card-index">02</div>
+              <h3>Вёрстка</h3>
+              <p>Попроси изменить отступы, размеры, порядок блоков или расположение элементов на мобильном.</p>
+            </article>
+            <article class="card" id="card-style">
+              <div class="card-index">03</div>
+              <h3>Стили</h3>
+              <p>Цвет, фон, границы, тени и типографика. В данных сохранятся вычисленные CSS-свойства.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="workflow" class="footer">
+          <span>Демо для локального review-сервера</span>
+          <span>Нажми «Комментировать» в правом нижнем углу</span>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const value = document.querySelector('#preview-value');
+      const primary = document.querySelector('#primary-action');
+      const secondary = document.querySelector('#secondary-action');
+      let clicks = 0;
+      primary.addEventListener('click', () => {
+        clicks += 1;
+        value.textContent = String(clicks);
+        value.animate(
+          [{ transform: 'scale(1)' }, { transform: 'scale(1.08)' }, { transform: 'scale(1)' }],
+          { duration: 220, easing: 'ease-out' }
+        );
+      });
+      secondary.addEventListener('click', () => {
+        document.querySelector('#features').scrollIntoView({ behavior: 'smooth' });
+      });
+    </script>
+  </body>
+</html>

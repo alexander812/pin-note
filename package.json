@@ -1,0 +1,19 @@
+{
+  "name": "pin-note",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PinNote — local visual review layer that turns website comments into structured feedback for an AI coding agent.",
+  "type": "module",
+  "bin": {
+    "pin-note": "bin/pin-note.mjs"
+  },
+  "scripts": {
+    "start": "node bin/pin-note.mjs",
+    "demo": "node bin/pin-note.mjs examples/demo",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
