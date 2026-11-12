@@ -9,7 +9,10 @@ const API = '/__review';
 const HOST_ID = 'pin-note-root';
 const LOCAL_KEY = 'pin-note:comments:v1';
 const TOOLBAR_KEY = 'pin-note:toolbar-position:v1';
+const LOCAL_FALLBACK_SUFFIX = 'local';
 const PIN_OFFSET = 20;
+const SHOT_COLORS = ['#ff5d5d', '#ff9f43', '#ffd93d', '#48d597', '#4dd0e1', '#5b8cff', '#b57bff'];
+const SHOT_MAX_SIDE = 2200;
 
 const STATIC_HTML = `
   <div class="pn-highlight" data-role="highlight" hidden>
@@ -54,9 +57,16 @@ const STATIC_HTML = `
       </div>
       <button type="button" class="pn-icon-btn" data-action="cancel" aria-label="Закрыть">×</button>
     </div>
+    <div class="pn-shot-row">
+      <button type="button" class="pn-btn pn-btn-ghost pn-shot-trigger" data-action="capture-screenshot">Скриншот элемента</button>
+      <div class="pn-shot-preview" data-role="shot-preview" hidden>
+        <img data-role="shot-preview-img" alt="Прикреплённый скриншот">
+        <button type="button" class="pn-icon-btn pn-shot-remove" data-action="remove-screenshot" aria-label="Убрать скриншот">×</button>
+      </div>
+    </div>
     <textarea data-role="comment-input" rows="4" placeholder="Что изменить? Например: сделай заголовок крупнее и добавь отступ…"></textarea>
     <div class="pn-popover-foot">
-      <span class="pn-hint">⌘↵ — сохранить<br>Alt+клик — выбрать родителя</span>
+      <span class="pn-hint">⌘↵ — сохранить<br>Alt/Option+клик — выше по дереву</span>
       <div class="pn-popover-actions">
         <button type="button" class="pn-btn pn-btn-ghost" data-action="cancel">Отмена</button>
         <button type="button" class="pn-btn pn-btn-primary" data-action="save" disabled>Сохранить</button>
@@ -64,6 +74,29 @@ const STATIC_HTML = `
     </div>
   </div>
   <div class="pn-toast" data-role="toast" role="status" hidden></div>
+  <div class="pn-annotator" data-role="annotator" hidden>
+    <div class="pn-annotator-card" role="dialog" aria-modal="true" aria-label="Аннотация скриншота">
+      <div class="pn-annotator-head">
+        <div>
+          <div class="pn-eyebrow">Скриншот</div>
+          <strong>Нарисуй пометки на изображении</strong>
+        </div>
+        <button type="button" class="pn-icon-btn" data-action="close-annotator" aria-label="Закрыть">×</button>
+      </div>
+      <div class="pn-annotator-stage">
+        <canvas data-role="annotator-canvas"></canvas>
+      </div>
+      <div class="pn-annotator-foot">
+        <div class="pn-annotator-colors" data-role="annotator-colors" aria-label="Цвет линии"></div>
+        <div class="pn-annotator-actions">
+          <button type="button" class="pn-btn pn-btn-ghost" data-action="annotator-undo">Отменить</button>
+          <button type="button" class="pn-btn pn-btn-ghost" data-action="annotator-clear">Очистить</button>
+          <button type="button" class="pn-btn pn-btn-ghost" data-action="annotator-cancel">Отмена</button>
+          <button type="button" class="pn-btn pn-btn-primary" data-action="annotator-attach">Прикрепить</button>
+        </div>
+      </div>
+    </div>
+  </div>
 `;
 
 class ApiError extends Error {
@@ -91,6 +124,7 @@ class ReviewClient {
       server: false,
       config: {},
       compose: null,
+      annotator: null,
       hovered: null,
       flash: null,
       pendingReload: false,
@@ -106,6 +140,8 @@ class ReviewClient {
 
   async boot() {
     this.captureRefs();
+    this.host.dataset.filter = this.state.filter;
+    this.host.dataset.panel = this.state.panel ? 'open' : 'closed';
     this.bindUi();
     this.bindToolbarDrag();
     this.restoreToolbarPosition();
@@ -137,6 +173,11 @@ class ReviewClient {
       saveButton: this.shadow.querySelector('[data-action="save"]'),
       filters: [...this.shadow.querySelectorAll('[data-action="filter"]')],
       panelButton: this.shadow.querySelector('[data-action="panel"]'),
+      shotPreview: find('shot-preview'),
+      shotPreviewImg: find('shot-preview-img'),
+      annotator: find('annotator'),
+      annotatorCanvas: find('annotator-canvas'),
+      annotatorColors: find('annotator-colors'),
     };
     this.refs.modeButton.innerHTML = '<span class="pn-dot"></span><span data-role="mode-label">Комментировать</span>';
     this.refs.modeLabel = this.shadow.querySelector('[data-role="mode-label"]');
@@ -148,7 +189,7 @@ class ReviewClient {
       if (!target || !this.app.contains(target)) return;
       event.preventDefault();
       event.stopPropagation();
-      this.handleAction(target.dataset.action, target.dataset.id, target.dataset.filter);
+      this.handleAction(target.dataset.action, target.dataset.id, target.dataset.filter, target.dataset.color);
     });
 
     this.app.addEventListener('input', (event) => {
@@ -186,6 +227,14 @@ class ReviewClient {
       this.state.hovered = null;
       this.scheduleHighlight();
     });
+
+    const canvas = this.refs.annotatorCanvas;
+    if (canvas) {
+      canvas.addEventListener('pointerdown', (event) => this.onAnnotatorPointerDown(event));
+      canvas.addEventListener('pointermove', (event) => this.onAnnotatorPointerMove(event));
+      canvas.addEventListener('pointerup', (event) => this.onAnnotatorPointerUp(event));
+      canvas.addEventListener('pointercancel', (event) => this.onAnnotatorPointerUp(event));
+    }
   }
 
   bindToolbarDrag() {
@@ -340,12 +389,23 @@ class ReviewClient {
     event.stopPropagation();
     event.stopImmediatePropagation();
 
-    let element = this.targetElement(event);
-    if (!element) return;
-    if (event.altKey && element.parentElement && element.parentElement !== document.documentElement) {
-      element = element.parentElement;
+    const clicked = this.targetElement(event);
+    if (!clicked) return;
+
+    if (!event.altKey) {
+      this.openCompose(clicked, event);
+      return;
     }
-    this.openCompose(element, event);
+
+    const current = this.state.compose?.element;
+    if (current?.isConnected && (current === clicked || current.contains(clicked))) {
+      this.selectParent(event);
+      return;
+    }
+
+    const parent = clicked.parentElement;
+    if (!parent || parent === document.documentElement) return;
+    this.openCompose(parent, event);
   }
 
   onPageSubmit(event) {
@@ -357,6 +417,11 @@ class ReviewClient {
 
   onPageKeydown(event) {
     if (event.key !== 'Escape') return;
+    if (this.state.annotator) {
+      event.preventDefault();
+      this.closeAnnotator();
+      return;
+    }
     if (this.state.compose) {
       event.preventDefault();
       this.closeCompose();
@@ -383,11 +448,12 @@ class ReviewClient {
       this.connectEvents();
     } catch {
       this.state.server = false;
-      this.state.comments = this.loadLocal();
       this.state.config = {
         project: location.hostname || 'website',
+        projectId: `${LOCAL_FALLBACK_SUFFIX}:${location.origin}${location.pathname}`,
         commentsFile: '.review/comments.json',
       };
+      this.state.comments = this.loadLocal();
     }
   }
 
@@ -458,9 +524,15 @@ class ReviewClient {
     return response.text();
   }
 
+  localStorageKey() {
+    const projectId = this.state.config?.projectId;
+    if (projectId) return `${LOCAL_KEY}:${projectId}`;
+    return `${LOCAL_KEY}:${LOCAL_FALLBACK_SUFFIX}:${location.origin}${location.pathname}`;
+  }
+
   loadLocal() {
     try {
-      const raw = localStorage.getItem(LOCAL_KEY);
+      const raw = localStorage.getItem(this.localStorageKey());
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       const comments = Array.isArray(parsed) ? parsed : parsed?.comments;
@@ -475,7 +547,7 @@ class ReviewClient {
   saveLocal() {
     try {
       localStorage.setItem(
-        LOCAL_KEY,
+        this.localStorageKey(),
         JSON.stringify({
           version: 1,
           updatedAt: new Date().toISOString(),
@@ -502,13 +574,14 @@ class ReviewClient {
     this.setPanel(false);
     if (!this.state.hintShown) {
       this.state.hintShown = true;
-      this.toast('Кликните по элементу. Alt+клик — выбрать родителя.');
+      this.toast('Кликните по элементу. Alt/Option+клик — подняться по дереву.');
     }
   }
 
   setPanel(open) {
     this.state.panel = Boolean(open);
     this.refs.panel.hidden = !this.state.panel;
+    this.host.dataset.panel = this.state.panel ? 'open' : 'closed';
     this.app.classList.toggle('has-panel', this.state.panel);
     if (this.state.panel) this.renderPanel();
   }
@@ -522,11 +595,13 @@ class ReviewClient {
   }
 
   openCompose(element, event) {
+    this.clearScreenshot();
     const anchor = this.captureAnchor(element, event);
     const rect = element.getBoundingClientRect();
     this.state.compose = {
       element,
       anchor,
+      screenshot: null,
       click: event
         ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top }
         : null,
@@ -544,6 +619,362 @@ class ReviewClient {
     this.positionPopover(element);
     this.scheduleHighlight();
     requestAnimationFrame(() => this.refs.input.focus());
+  }
+
+  selectParent(event) {
+    const compose = this.state.compose;
+    if (!compose) return;
+    const parent = compose.element?.parentElement;
+    if (!parent || parent === document.documentElement) {
+      this.toast('Выше уже некуда');
+      return;
+    }
+    this.updateComposeTarget(parent, event);
+  }
+
+  updateComposeTarget(element, event) {
+    this.clearScreenshot();
+    const anchor = this.captureAnchor(element, event);
+    const rect = element.getBoundingClientRect();
+    this.state.compose = {
+      element,
+      anchor,
+      screenshot: null,
+      click: event
+        ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top }
+        : null,
+    };
+    this.state.hovered = element;
+    this.refs.targetTag.textContent = `<${element.localName}>`;
+    const text = anchor.text ? `«${anchor.text.slice(0, 110)}»` : anchor.selector;
+    this.refs.targetText.textContent = text;
+    this.refs.targetText.title = anchor.selector;
+    this.positionPopover(element);
+    this.scheduleHighlight();
+  }
+
+  clearScreenshot() {
+    const shot = this.state.compose?.screenshot;
+    if (shot?.previewUrl) URL.revokeObjectURL(shot.previewUrl);
+    if (this.state.compose) this.state.compose.screenshot = null;
+    if (this.refs.shotPreview) this.refs.shotPreview.hidden = true;
+    if (this.refs.shotPreviewImg) this.refs.shotPreviewImg.removeAttribute('src');
+  }
+
+  async captureScreenshot() {
+    const compose = this.state.compose;
+    if (!compose) return;
+    if (!this.state.server) {
+      this.toast('Скриншоты доступны только с review-сервером', 'error');
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      this.toast('Браузер не поддерживает захват вкладки', 'error');
+      return;
+    }
+
+    let stream = null;
+    let video = null;
+    try {
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: 'browser' },
+          audio: false,
+          preferCurrentTab: true,
+        });
+      } catch (err) {
+        if (err?.name === 'NotAllowedError') return;
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      }
+
+      const track = stream.getVideoTracks()[0];
+      if (!track) throw new Error('Не удалось получить видеопоток');
+      const surface = track.getSettings?.().displaySurface;
+      video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Не удалось получить кадр')), 6000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        video.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error('Не удалось прочитать видеопоток'));
+        };
+      });
+      await video.play();
+
+      if (this.state.compose !== compose) return;
+      if (surface && surface !== 'browser') {
+        throw new Error('Выбери вкладку с сайтом, а не окно или экран');
+      }
+      const videoRatio = video.videoWidth / video.videoHeight;
+      const viewportRatio = innerWidth / innerHeight;
+      if (Math.abs(videoRatio - viewportRatio) > 0.04) {
+        throw new Error('Выбери вкладку с сайтом, а не окно или экран');
+      }
+
+      const element = compose.element.isConnected ? compose.element : null;
+      const rect = element
+        ? element.getBoundingClientRect()
+        : { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+      const padding = 16;
+      let left = Math.max(0, Math.min(rect.left, rect.right) - padding);
+      let top = Math.max(0, Math.min(rect.top, rect.bottom) - padding);
+      let right = Math.min(innerWidth, Math.max(rect.left, rect.right) + padding);
+      let bottom = Math.min(innerHeight, Math.max(rect.top, rect.bottom) + padding);
+      if (right - left < 8 || bottom - top < 8) {
+        left = 0;
+        top = 0;
+        right = innerWidth;
+        bottom = innerHeight;
+      }
+
+      const scaleX = video.videoWidth / innerWidth;
+      const scaleY = video.videoHeight / innerHeight;
+      const sourceWidth = (right - left) * scaleX;
+      const sourceHeight = (bottom - top) * scaleY;
+      const scale = Math.min(1, SHOT_MAX_SIDE / Math.max(sourceWidth, sourceHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+      const context = canvas.getContext('2d');
+
+      const previousVisibility = this.host.style.visibility;
+      this.host.style.visibility = 'hidden';
+      try {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        context.drawImage(
+          video,
+          left * scaleX,
+          top * scaleY,
+          sourceWidth,
+          sourceHeight,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+      } finally {
+        this.host.style.visibility = previousVisibility;
+      }
+
+      this.openAnnotator(canvas);
+    } catch (err) {
+      if (err?.name !== 'NotAllowedError') {
+        this.toast(err.message || 'Не удалось сделать скриншот', 'error');
+      }
+    } finally {
+      for (const track of stream?.getTracks?.() || []) track.stop();
+      if (video) video.srcObject = null;
+    }
+  }
+
+  openAnnotator(sourceCanvas) {
+    const base = document.createElement('canvas');
+    base.width = sourceCanvas.width;
+    base.height = sourceCanvas.height;
+    base.getContext('2d').drawImage(sourceCanvas, 0, 0);
+
+    const canvas = this.refs.annotatorCanvas;
+    canvas.width = base.width;
+    canvas.height = base.height;
+    const ctx = canvas.getContext('2d');
+    this.state.annotator = {
+      base,
+      canvas,
+      ctx,
+      strokes: [],
+      current: null,
+      color: SHOT_COLORS[0],
+      lineWidth: Math.max(2, Math.round(base.width / 240)),
+    };
+    this.renderAnnotatorColors();
+    this.renderAnnotator();
+    this.refs.annotator.hidden = false;
+    this.host.dataset.annotator = 'open';
+  }
+
+  renderAnnotatorColors() {
+    const container = this.refs.annotatorColors;
+    if (!container) return;
+    container.replaceChildren();
+    for (const color of SHOT_COLORS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pn-color';
+      button.dataset.action = 'annotator-color';
+      button.dataset.color = color;
+      button.style.setProperty('--pn-color', color);
+      button.title = color;
+      button.setAttribute('aria-label', `Цвет линии ${color}`);
+      container.append(button);
+    }
+    this.syncAnnotatorColor();
+  }
+
+  syncAnnotatorColor() {
+    const color = this.state.annotator?.color;
+    for (const button of this.refs.annotatorColors?.children || []) {
+      const active = button.dataset.color === color;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+  }
+
+  setAnnotatorColor(color) {
+    if (!this.state.annotator || !SHOT_COLORS.includes(color)) return;
+    this.state.annotator.color = color;
+    this.syncAnnotatorColor();
+  }
+
+  annotatorPoint(event) {
+    const canvas = this.refs.annotatorCanvas;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) * canvas.width) / Math.max(1, rect.width),
+      y: ((event.clientY - rect.top) * canvas.height) / Math.max(1, rect.height),
+    };
+  }
+
+  onAnnotatorPointerDown(event) {
+    const annotator = this.state.annotator;
+    if (!annotator || event.button !== 0) return;
+    event.preventDefault();
+    annotator.current = {
+      color: annotator.color,
+      width: annotator.lineWidth,
+      points: [this.annotatorPoint(event)],
+      pointerId: event.pointerId,
+    };
+    try {
+      this.refs.annotatorCanvas.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Synthetic pointer events and older browsers may not support capture.
+    }
+    this.renderAnnotator();
+  }
+
+  onAnnotatorPointerMove(event) {
+    const annotator = this.state.annotator;
+    if (!annotator?.current || annotator.current.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    annotator.current.points.push(this.annotatorPoint(event));
+    this.renderAnnotator();
+  }
+
+  onAnnotatorPointerUp(event) {
+    const annotator = this.state.annotator;
+    if (!annotator?.current || annotator.current.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    annotator.strokes.push(annotator.current);
+    annotator.current = null;
+    try {
+      this.refs.annotatorCanvas.releasePointerCapture?.(event.pointerId);
+    } catch {
+      // Ignore.
+    }
+    this.renderAnnotator();
+  }
+
+  renderAnnotator() {
+    const annotator = this.state.annotator;
+    if (!annotator) return;
+    const { ctx, base, strokes, current } = annotator;
+    ctx.clearRect(0, 0, base.width, base.height);
+    ctx.drawImage(base, 0, 0);
+    for (const stroke of strokes) this.drawAnnotationStroke(ctx, stroke);
+    if (current) this.drawAnnotationStroke(ctx, current);
+  }
+
+  drawAnnotationStroke(ctx, stroke) {
+    const points = stroke.points || [];
+    if (points.length === 0) return;
+    ctx.save();
+    ctx.strokeStyle = stroke.color;
+    ctx.fillStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (points.length === 1) {
+      ctx.beginPath();
+      ctx.arc(points[0].x, points[0].y, stroke.width / 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (const point of points.slice(1)) ctx.lineTo(point.x, point.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  undoAnnotation() {
+    if (!this.state.annotator) return;
+    this.state.annotator.strokes.pop();
+    this.renderAnnotator();
+  }
+
+  clearAnnotation() {
+    if (!this.state.annotator) return;
+    this.state.annotator.strokes = [];
+    this.state.annotator.current = null;
+    this.renderAnnotator();
+  }
+
+  closeAnnotator() {
+    this.state.annotator = null;
+    this.refs.annotator.hidden = true;
+    delete this.host.dataset.annotator;
+  }
+
+  async attachAnnotation() {
+    const annotator = this.state.annotator;
+    if (!annotator || !this.state.compose) return;
+    const blob = await new Promise((resolve) => annotator.canvas.toBlob(resolve, 'image/png'));
+    if (!blob) {
+      this.toast('Не удалось подготовить скриншот', 'error');
+      return;
+    }
+    this.clearScreenshot();
+    const previewUrl = URL.createObjectURL(blob);
+    this.state.compose.screenshot = {
+      blob,
+      width: annotator.canvas.width,
+      height: annotator.canvas.height,
+      previewUrl,
+    };
+    this.refs.shotPreviewImg.src = previewUrl;
+    this.refs.shotPreview.hidden = false;
+    this.positionPopover(this.state.compose.element);
+    this.closeAnnotator();
+    this.toast('Скриншот прикреплён');
+  }
+
+  async uploadScreenshot(shot) {
+    const width = Math.round(shot.width || 0);
+    const height = Math.round(shot.height || 0);
+    const response = await fetch(`${API}/screenshots?width=${width}&height=${height}`, {
+      method: 'POST',
+      headers: { 'content-type': 'image/png' },
+      body: shot.blob,
+    });
+    if (!response.ok) {
+      let message = `HTTP ${response.status}`;
+      try {
+        const data = await response.json();
+        if (data?.error) message = data.error;
+      } catch {
+        // Ignore non-JSON errors.
+      }
+      throw new ApiError(message, response.status);
+    }
+    const data = await response.json();
+    return data.screenshot;
   }
 
   positionPopover(element) {
@@ -590,6 +1021,7 @@ class ReviewClient {
 
   closeCompose({ reload = true } = {}) {
     if (!this.state.compose) return;
+    this.clearScreenshot();
     this.state.compose = null;
     this.refs.popover.hidden = true;
     this.refs.input.value = '';
@@ -611,6 +1043,23 @@ class ReviewClient {
       url: location.href,
       anchor: compose.anchor,
     };
+
+    if (compose.screenshot?.blob) {
+      if (!this.state.server) {
+        this.state.busy = false;
+        this.refs.saveButton.disabled = false;
+        this.toast('Скриншоты доступны только с review-сервером', 'error');
+        return;
+      }
+      try {
+        payload.screenshot = await this.uploadScreenshot(compose.screenshot);
+      } catch (err) {
+        this.state.busy = false;
+        this.refs.saveButton.disabled = false;
+        this.toast(err.message || 'Не удалось загрузить скриншот', 'error');
+        return;
+      }
+    }
 
     let saved = null;
     let usedLocalFallback = false;
@@ -656,7 +1105,7 @@ class ReviewClient {
 
   createLocalComment(payload) {
     const now = new Date().toISOString();
-    return {
+    const comment = {
       id: `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       status: 'open',
       comment: payload.comment,
@@ -667,6 +1116,8 @@ class ReviewClient {
       createdAt: now,
       updatedAt: now,
     };
+    if (payload.screenshot) comment.screenshot = payload.screenshot;
+    return comment;
   }
 
   captureAnchor(element, event) {
@@ -962,7 +1413,7 @@ class ReviewClient {
     if (document.hidden) return;
     const seen = new Set();
     const offsets = new Map();
-    this.state.comments.forEach((comment, index) => {
+    this.filteredComments().forEach((comment) => {
       const element = this.resolveAnchor(comment.anchor);
       if (!element) return;
       const rect = element.getBoundingClientRect();
@@ -970,6 +1421,7 @@ class ReviewClient {
       if (rect.bottom < -30 || rect.top > innerHeight + 30) return;
       const offset = (offsets.get(element) || 0) * PIN_OFFSET;
       offsets.set(element, (offsets.get(element) || 0) + 1);
+      const number = this.state.comments.findIndex((item) => item.id === comment.id) + 1;
 
       let pin = this.pinElements.get(comment.id);
       if (!pin || !pin.isConnected) {
@@ -981,9 +1433,9 @@ class ReviewClient {
         this.refs.pins.append(pin);
       }
       pin.className = `pn-pin status-${comment.status || 'open'}${comment.id === this.state.activeId ? ' is-active' : ''}`;
-      pin.textContent = String(index + 1);
+      pin.textContent = String(number || 1);
       pin.title = comment.comment || comment.id;
-      pin.setAttribute('aria-label', `Комментарий ${index + 1}`);
+      pin.setAttribute('aria-label', `Комментарий ${number || 1}`);
       pin.style.left = `${Math.round(Math.min(innerWidth - 28, Math.max(4, rect.left - 10 + offset)))}px`;
       pin.style.top = `${Math.round(Math.min(innerHeight - 28, Math.max(4, rect.top - 10)))}px`;
       seen.add(comment.id);
@@ -1017,13 +1469,14 @@ class ReviewClient {
 
   updateServerNote() {
     const local = !this.state.server;
+    const project = this.state.config.project || 'website';
     this.refs.server.classList.toggle('is-local', local);
     if (local) {
       this.refs.server.textContent =
-        'Локальный режим: комментарии в localStorage. Запусти review-сервер, чтобы писать в .review/comments.json.';
+        `Проект: ${project} · локальный режим: комментарии в localStorage. Запусти review-сервер, чтобы писать в .review/comments.json.`;
     } else {
       const file = this.state.config.commentsFile || '.review/comments.json';
-      this.refs.server.textContent = `Файл: ${file} · изменения подхватываются автоматически`;
+      this.refs.server.textContent = `Проект: ${project} · файл: ${file} · изменения подхватываются автоматически`;
     }
   }
 
@@ -1043,6 +1496,8 @@ class ReviewClient {
   renderPanel() {
     const list = this.filteredComments();
     this.refs.list.replaceChildren();
+    this.host.dataset.filter = this.state.filter;
+    this.refs.panel.dataset.filter = this.state.filter;
     this.updateCounts();
     this.updateServerNote();
     for (const filter of this.refs.filters) {
@@ -1162,8 +1617,30 @@ class ReviewClient {
 
     card.append(head, body);
     if (resolution) card.append(resolution);
+    if (comment.screenshot?.file) card.append(this.renderCommentScreenshot(comment.screenshot));
     card.append(meta, actions);
     return card;
+  }
+
+  screenshotUrl(file) {
+    return `${API}/screenshots/${encodeURIComponent(String(file).split('/').pop())}`;
+  }
+
+  renderCommentScreenshot(screenshot) {
+    const link = document.createElement('a');
+    link.className = 'pn-comment-shot';
+    link.href = this.screenshotUrl(screenshot.file);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = 'Открыть скриншот';
+    link.addEventListener('click', (event) => event.stopPropagation());
+    const image = document.createElement('img');
+    image.src = link.href;
+    image.alt = 'Скриншот к комментарию';
+    image.loading = 'lazy';
+    image.addEventListener('error', () => link.remove());
+    link.append(image);
+    return link;
   }
 
   actionButton(label, action, id, extraClass = '') {
@@ -1206,7 +1683,7 @@ class ReviewClient {
     }
   }
 
-  async handleAction(action, id, filter) {
+  async handleAction(action, id, filter, color) {
     switch (action) {
       case 'mode':
         this.setMode(!this.state.mode);
@@ -1219,7 +1696,35 @@ class ReviewClient {
         break;
       case 'filter':
         this.state.filter = filter || 'all';
+        this.state.hovered = null;
+        this.state.flash = null;
+        this.host.dataset.filter = this.state.filter;
+        this.refs.panel.dataset.filter = this.state.filter;
         this.renderPanel();
+        this.schedulePins();
+        this.scheduleHighlight();
+        break;
+      case 'capture-screenshot':
+        await this.captureScreenshot();
+        break;
+      case 'remove-screenshot':
+        this.clearScreenshot();
+        break;
+      case 'annotator-color':
+        this.setAnnotatorColor(color);
+        break;
+      case 'annotator-undo':
+        this.undoAnnotation();
+        break;
+      case 'annotator-clear':
+        this.clearAnnotation();
+        break;
+      case 'annotator-cancel':
+      case 'close-annotator':
+        this.closeAnnotator();
+        break;
+      case 'annotator-attach':
+        await this.attachAnnotation();
         break;
       case 'save':
         await this.saveDraft();

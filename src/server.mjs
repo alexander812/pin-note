@@ -1,14 +1,18 @@
+import { createHash } from 'node:crypto';
 import { createReadStream, watch } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createProxy } from './proxy.mjs';
 import { ReviewStore } from './store.mjs';
 
 const VERSION = '0.1.0';
 const CLIENT_DIR = dirname(fileURLToPath(import.meta.url));
 const API_PREFIX = '/__review/';
 const MAX_BODY = 512 * 1024;
+const MAX_SCREENSHOT = 12 * 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -150,6 +154,47 @@ function readJson(request) {
   });
 }
 
+function readBinary(request, limit) {
+  return new Promise((resolvePromise, reject) => {
+    let size = 0;
+    const chunks = [];
+    request.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(Object.assign(new Error('Скриншот слишком большой'), { status: 413 }));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on('end', () => resolvePromise(Buffer.concat(chunks)));
+    request.on('error', reject);
+  });
+}
+
+function screenshotExtension(buffer, contentType) {
+  const type = String(contentType || '').toLowerCase();
+  if (
+    type.includes('image/png') &&
+    buffer.length >= PNG_SIGNATURE.length &&
+    buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
+  ) {
+    return 'png';
+  }
+  if (type.includes('image/jpeg') && buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    return 'jpg';
+  }
+  if (
+    type.includes('image/webp') &&
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'webp';
+  }
+  return null;
+}
+
 function assertSameOrigin(request) {
   const origin = request.headers.origin;
   if (!origin) return;
@@ -191,13 +236,17 @@ export async function createReviewServer(options = {}) {
   const root = resolve(options.root || process.cwd());
   const sourceRoot = resolve(options.sourceRoot || root);
   const dataDir = resolve(options.dataDir || join(root, '.review'));
+  const projectId = createHash('sha1').update(root).digest('hex').slice(0, 16);
   const watchFiles = options.watch !== false;
+  const watchRoot = watchFiles && !options.target;
   const spa = Boolean(options.spa);
+  const proxy = options.target ? createProxy({ target: options.target, injectClient }) : null;
   const store = new ReviewStore({ root, dataDir, sourceRoot });
   await store.init();
 
   const clients = new Set();
   let watchHandle = null;
+  let dataWatchHandle = null;
   let pollTimer = null;
   let heartbeatTimer = null;
   let lastEntryMtime = null;
@@ -250,27 +299,46 @@ export async function createReviewServer(options = {}) {
     const rel = String(filename).replaceAll('\\', '/');
     const base = rel.split('/').pop() || '';
 
-    if (rel.startsWith('.review/') || rel === '.review') {
-      if (base === 'comments.json' || base.startsWith('comments.json.')) notifyComments();
-      return;
-    }
+    if (rel.startsWith('.review/') || rel === '.review') return;
     if (IGNORED_WATCH_PREFIXES.some((prefix) => rel.startsWith(prefix))) return;
     const extension = extname(base).toLowerCase();
     if (WATCH_EXTENSIONS.has(extension)) notifyReload();
   };
 
-  const startWatching = () => {
+  const onDataWatchEvent = (event, filename) => {
+    if (!filename) return;
+    const base = String(filename).replaceAll('\\', '/').split('/').pop() || '';
+    if (base === 'comments.json') notifyComments();
+  };
+
+  const startDataWatching = () => {
     if (!watchFiles) return;
     try {
-      watchHandle = watch(root, { recursive: true }, onWatchEvent);
-      watchHandle.on('error', (err) => {
-        console.warn(`[pin-note] file watcher: ${err.message}`);
-        startPolling();
+      dataWatchHandle = watch(dataDir, { recursive: false }, onDataWatchEvent);
+      dataWatchHandle.on('error', (err) => {
+        console.warn(`[pin-note] watcher данных: ${err.message}`);
+        dataWatchHandle = null;
       });
     } catch (err) {
-      console.warn(`[pin-note] file watcher недоступен: ${err.message}`);
-      startPolling();
+      console.warn(`[pin-note] watcher данных недоступен: ${err.message}`);
     }
+  };
+
+  const startWatching = () => {
+    if (!watchFiles) return;
+    if (watchRoot) {
+      try {
+        watchHandle = watch(root, { recursive: true }, onWatchEvent);
+        watchHandle.on('error', (err) => {
+          console.warn(`[pin-note] file watcher: ${err.message}`);
+          startPolling();
+        });
+      } catch (err) {
+        console.warn(`[pin-note] file watcher недоступен: ${err.message}`);
+        startPolling();
+      }
+    }
+    startDataWatching();
   };
 
   const stopWatching = () => {
@@ -281,6 +349,14 @@ export async function createReviewServer(options = {}) {
         // Ignore.
       }
       watchHandle = null;
+    }
+    if (dataWatchHandle) {
+      try {
+        dataWatchHandle.close();
+      } catch {
+        // Ignore.
+      }
+      dataWatchHandle = null;
     }
     if (pollTimer) {
       clearInterval(pollTimer);
@@ -424,15 +500,71 @@ export async function createReviewServer(options = {}) {
       sendJson(response, 200, {
         version: VERSION,
         project: store.project,
+        projectId,
         commentsFile: relative(root, store.commentsFile),
         feedbackFile: relative(root, store.feedbackFile),
         instructionsFile: relative(root, store.instructionsFile),
+        screenshotsDir: relative(root, store.screenshotsDir),
         capabilities: {
           sourceHints: true,
-          screenshots: false,
+          screenshots: true,
           canvasArea: false,
+          maxScreenshotBytes: MAX_SCREENSHOT,
         },
       });
+      return;
+    }
+
+    if (method === 'POST' && route === 'screenshots') {
+      assertSameOrigin(request);
+      const contentType = String(request.headers['content-type'] || '');
+      const buffer = await readBinary(request, MAX_SCREENSHOT);
+      const extension = screenshotExtension(buffer, contentType);
+      if (!buffer.length || !extension) {
+        sendJson(response, 415, { error: 'Ожидался PNG, JPEG или WebP' });
+        return;
+      }
+      const width = Number(searchParams.get('width')) || 0;
+      const height = Number(searchParams.get('height')) || 0;
+      const screenshot = await store.saveScreenshot(buffer, extension, { width, height });
+      sendJson(response, 201, { screenshot });
+      return;
+    }
+
+    if ((method === 'GET' || method === 'HEAD') && route.startsWith('screenshots/')) {
+      let name;
+      try {
+        name = decodeURIComponent(route.slice('screenshots/'.length));
+      } catch {
+        sendText(response, 400, 'Bad Request');
+        return;
+      }
+      const filePath = store.resolveScreenshot(name);
+      if (!filePath) {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      let info;
+      try {
+        info = await stat(filePath);
+      } catch {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      if (!info.isFile()) {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      response.writeHead(200, {
+        'Content-Type': store.screenshotContentType(name),
+        'Content-Length': info.size,
+        'Cache-Control': 'private, max-age=3600',
+      });
+      if (method === 'HEAD') {
+        response.end();
+        return;
+      }
+      createReadStream(filePath).pipe(response);
       return;
     }
 
@@ -501,6 +633,10 @@ export async function createReviewServer(options = {}) {
         await handleReview(request, response, parsed.pathname, parsed.searchParams);
         return;
       }
+      if (proxy) {
+        proxy.handleHttp(request, response);
+        return;
+      }
       await handleStatic(request, response, parsed.pathname);
     } catch (err) {
       const status = Number(err?.status) || 500;
@@ -515,7 +651,23 @@ export async function createReviewServer(options = {}) {
     }
   };
 
+  const upgradeSockets = new Set();
   const server = createServer(handleRequest);
+
+  server.on('upgrade', (request, socket, head) => {
+    socket.on('error', () => {});
+    if (!proxy) {
+      socket.destroy();
+      return;
+    }
+    upgradeSockets.add(socket);
+    socket.on('close', () => upgradeSockets.delete(socket));
+    try {
+      proxy.handleUpgrade(request, socket, head);
+    } catch {
+      socket.destroy();
+    }
+  });
 
   const listen = async (port = options.port ?? 4174, host = options.host || '127.0.0.1') => {
     await new Promise((resolvePromise, reject) => {
@@ -556,6 +708,14 @@ export async function createReviewServer(options = {}) {
       }
     }
     clients.clear();
+    for (const socket of upgradeSockets) {
+      try {
+        socket.destroy();
+      } catch {
+        // Ignore.
+      }
+    }
+    upgradeSockets.clear();
     await new Promise((resolvePromise) => {
       server.close(() => resolvePromise());
       server.closeAllConnections?.();
@@ -581,6 +741,7 @@ export async function createReviewServer(options = {}) {
     listen,
     close,
     broadcast,
+    target: proxy?.target?.href || null,
     get url() {
       return url;
     },

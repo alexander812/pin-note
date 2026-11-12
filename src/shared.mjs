@@ -121,6 +121,10 @@ export function formatCommentMarkdown(comment, index = 0) {
   }
   const hintLine = sourceHintLine(comment?.sourceHints);
   if (hintLine) lines.push(`**Источник:** ${hintLine}`);
+  if (comment?.screenshot?.file) {
+    lines.push('', `**Скриншот:** ${inlineCode(comment.screenshot.file)}`);
+    lines.push('', `![Скриншот](${comment.screenshot.file})`);
+  }
   if (anchor.html) {
     const html = String(anchor.html);
     const clipped = html.length > 4000 ? `${html.slice(0, 3999)}…` : html;

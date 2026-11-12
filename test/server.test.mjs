@@ -98,6 +98,7 @@ test('returns config and initial comments', async () => {
   const config = await json(`${base}/__review/config`);
   assert.equal(config.response.status, 200);
   assert.equal(config.body.project, root.split('/').pop());
+  assert.match(config.body.projectId, /^[a-f0-9]{16}$/);
   assert.equal(config.body.commentsFile, '.review/comments.json');
   assert.equal(config.body.capabilities.sourceHints, true);
   const instructions = await readFile(join(root, '.review', 'AGENT.md'), 'utf8');
@@ -184,4 +185,43 @@ test('resists path traversal attempts', async () => {
   assert.notEqual(response.status, 200);
   const text = await response.text();
   assert.doesNotMatch(text, /root:/);
+});
+
+test('stores screenshots and attaches them to comments', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  );
+  const upload = await fetch(`${base}/__review/screenshots?width=1&height=1`, {
+    method: 'POST',
+    headers: { 'content-type': 'image/png' },
+    body: png,
+  });
+  assert.equal(upload.status, 201);
+  const { screenshot } = await upload.json();
+  assert.match(screenshot.file, /^screenshots\/s_[a-z0-9_]+\.png$/);
+  assert.equal(screenshot.width, 1);
+  assert.equal(screenshot.height, 1);
+
+  const image = await fetch(`${base}/__review/screenshots/${screenshot.file.split('/').pop()}`);
+  assert.equal(image.status, 200);
+  assert.equal(image.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+
+  const created = await createComment({ comment: 'Скриншот', screenshot });
+  assert.equal(created.response.status, 201);
+  assert.deepEqual(created.body.comment.screenshot, screenshot);
+
+  const stored = JSON.parse(await readFile(join(root, '.review', 'comments.json'), 'utf8'));
+  const saved = stored.comments.find((comment) => comment.id === created.body.comment.id);
+  assert.deepEqual(saved.screenshot, screenshot);
+  const feedback = await readFile(join(root, '.review', 'feedback.md'), 'utf8');
+  assert.match(feedback, /!\[Скриншот\]\(screenshots\/s_[a-z0-9_]+\.png\)/);
+
+  const invalid = await fetch(`${base}/__review/screenshots`, {
+    method: 'POST',
+    headers: { 'content-type': 'image/png' },
+    body: 'not a png',
+  });
+  assert.equal(invalid.status, 415);
 });

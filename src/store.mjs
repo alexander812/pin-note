@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { formatAllMarkdown, STATUSES } from './shared.mjs';
 import { findSourceHints } from './source-hints.mjs';
@@ -93,6 +93,17 @@ function sanitizeAnchor(raw) {
   return anchor;
 }
 
+function sanitizeScreenshot(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const file = text(raw.file, 300);
+  if (!/^screenshots\/s_[a-z0-9_]+\.(?:png|jpe?g|webp)$/i.test(file)) return null;
+  return {
+    file,
+    width: Math.round(number(raw.width, 0, 0, 100000)),
+    height: Math.round(number(raw.height, 0, 0, 100000)),
+  };
+}
+
 function newId() {
   return `c_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`;
 }
@@ -116,11 +127,13 @@ export class ReviewStore {
     this.commentsFile = join(dataDir, 'comments.json');
     this.feedbackFile = join(dataDir, 'feedback.md');
     this.instructionsFile = join(dataDir, 'AGENT.md');
+    this.screenshotsDir = join(dataDir, 'screenshots');
     this.queue = Promise.resolve();
   }
 
   async init() {
     await mkdir(this.dataDir, { recursive: true });
+    await mkdir(this.screenshotsDir, { recursive: true });
     if (!(await exists(this.commentsFile))) {
       await this.write(commentsFileTemplate(this.project));
     }
@@ -130,7 +143,6 @@ export class ReviewStore {
   }
 
   async ensureInstructions() {
-    if (await exists(this.instructionsFile)) return;
     const content = `# PinNote
 
 Этот каталог создан локальным review-сервером.
@@ -143,10 +155,11 @@ export class ReviewStore {
 
 1. Прочитай \`comments.json\` и возьми комментарии со статусом \`open\` (а также \`orphaned\`, если можешь восстановить якорь).
 2. Найди исходник по \`anchor.selector\`, \`anchor.text\`, \`anchor.html\` и \`sourceHints\`.
-3. Внеси минимальную правку, не затрагивая несвязанные части сайта.
-4. После проверки обнови комментарий: \`status: "resolved"\` и \`resolution\` с кратким описанием.
-5. Если элемент не найден или правка невозможна, поставь \`status: "orphaned"\` или \`"wontfix"\` и объясни причину в \`resolution\`.
-6. Не удаляй комментарии и не переписывай чужие поля без необходимости.
+3. Если у комментария есть \`screenshot.file\`, открой файл относительно этого каталога: на скриншоте могут быть цветные пометки, показывающие нужное место.
+4. Внеси минимальную правку, не затрагивая несвязанные части сайта.
+5. После проверки обнови комментарий: \`status: "resolved"\` и \`resolution\` с кратким описанием.
+6. Если элемент не найден или правка невозможна, поставь \`status: "orphaned"\` или \`"wontfix"\` и объясни причину в \`resolution\`.
+7. Не удаляй комментарии и не переписывай чужие поля без необходимости.
 
 Сервер следит за \`comments.json\` и обновляет \`feedback.md\`, а браузер получает изменения по SSE.
 `;
@@ -216,6 +229,30 @@ export class ReviewStore {
     await rename(temporary, this.feedbackFile);
   }
 
+  async saveScreenshot(buffer, extension, { width = 0, height = 0 } = {}) {
+    const ext = extension === 'jpeg' ? 'jpg' : extension;
+    if (!['png', 'jpg', 'webp'].includes(ext)) throw error('Неподдерживаемый формат скриншота', 415);
+    const name = `s_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}.${ext}`;
+    await writeFile(join(this.screenshotsDir, name), buffer);
+    return {
+      file: `screenshots/${name}`,
+      width: Math.round(number(width, 0, 0, 100000)),
+      height: Math.round(number(height, 0, 0, 100000)),
+    };
+  }
+
+  resolveScreenshot(name) {
+    if (!/^s_[a-z0-9_]+\.(?:png|jpe?g|webp)$/i.test(String(name || ''))) return null;
+    return join(this.screenshotsDir, String(name));
+  }
+
+  screenshotContentType(name) {
+    const ext = String(name).split('.').pop().toLowerCase();
+    if (ext === 'png') return 'image/png';
+    if (ext === 'webp') return 'image/webp';
+    return 'image/jpeg';
+  }
+
   enqueue(work) {
     const run = this.queue.then(work);
     this.queue = run.catch(() => {});
@@ -229,6 +266,7 @@ export class ReviewStore {
       if (!commentText) throw error('Комментарий не может быть пустым', 400);
 
       const anchor = sanitizeAnchor(input?.anchor);
+      const screenshot = sanitizeScreenshot(input?.screenshot);
       const now = new Date().toISOString();
       let sourceHints = [];
       try {
@@ -248,6 +286,7 @@ export class ReviewStore {
         createdAt: now,
         updatedAt: now,
       };
+      if (screenshot) comment.screenshot = screenshot;
       store.comments.push(comment);
       await this.write(store);
       return comment;
@@ -277,6 +316,12 @@ export class ReviewStore {
         comment.resolution = text(patch.resolution, 5000).trim();
         changed = true;
       }
+      if (patch?.screenshot !== undefined) {
+        const screenshot = sanitizeScreenshot(patch.screenshot);
+        if (screenshot) comment.screenshot = screenshot;
+        else delete comment.screenshot;
+        changed = true;
+      }
       if (!changed) throw error('Нет полей для обновления', 400);
 
       comment.updatedAt = new Date().toISOString();
@@ -292,6 +337,11 @@ export class ReviewStore {
       if (index === -1) throw error('Комментарий не найден', 404);
       const [removed] = store.comments.splice(index, 1);
       await this.write(store);
+      if (removed.screenshot?.file) {
+        const name = basename(removed.screenshot.file);
+        const file = this.resolveScreenshot(name);
+        if (file) await unlink(file).catch(() => {});
+      }
       return removed;
     });
   }

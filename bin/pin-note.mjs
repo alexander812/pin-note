@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { access, stat } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { detectDevServer } from '../src/dev-server.mjs';
 import { createReviewServer } from '../src/server.mjs';
 
 const HELP = `PinNote 0.1.0
@@ -12,11 +13,14 @@ const HELP = `PinNote 0.1.0
   pin-note [directory] [options]
 
 Аргументы:
-  directory           Папка со статическим сайтом (по умолчанию текущая)
+  directory           Папка со статическим сайтом или корень проекта
+                      (по умолчанию текущая; в ней ищется dev-сервер)
 
 Опции:
   -p, --port <port>   Порт review-сервера (по умолчанию 4174)
       --host <host>   Хост (по умолчанию 127.0.0.1)
+      --target <url>  Явно указать адрес dev-сервера (например http://localhost:5173)
+      --no-detect     Не искать dev-сервер автоматически, работать как статический сервер
       --data-dir <dir> Каталог для comments.json и feedback.md (по умолчанию <directory>/.review)
       --source-dir <dir> Где искать исходники для подсказок (по умолчанию <directory>)
       --spa           Отдавать index.html для неизвестных HTML-маршрутов
@@ -33,6 +37,8 @@ function parseArgs(argv) {
     host: '127.0.0.1',
     dataDir: null,
     sourceDir: null,
+    target: null,
+    noDetect: false,
     spa: false,
     open: true,
     watch: true,
@@ -50,6 +56,10 @@ function parseArgs(argv) {
     }
     if (arg === '--no-watch') {
       options.watch = false;
+      continue;
+    }
+    if (arg === '--no-detect') {
+      options.noDetect = true;
       continue;
     }
     if (arg === '--spa') {
@@ -87,6 +97,13 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === '--target') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указан target dev-сервера');
+      options.target = value;
+      index += 1;
+      continue;
+    }
     if (arg.startsWith('-')) throw new Error(`Неизвестная опция: ${arg}`);
     if (directorySet) throw new Error(`Лишний аргумент: ${arg}`);
     options.directory = arg;
@@ -108,6 +125,15 @@ async function exists(path) {
   try {
     await access(path);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isPinNoteCheckout(path) {
+  try {
+    const pkg = JSON.parse(await readFile(`${path}/package.json`, 'utf8'));
+    return pkg?.name === 'pin-note' && (await exists(`${path}/bin/pin-note.mjs`));
   } catch {
     return false;
   }
@@ -169,8 +195,41 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  if (!(await exists(`${root}/index.html`))) {
-    console.warn(`[pin-note] В ${displayPath(root)} нет index.html — проверь путь.`);
+  const hasIndex = await exists(`${root}/index.html`);
+  let detection = null;
+
+  if (!options.target && !options.noDetect) {
+    detection = await detectDevServer(root);
+    if (detection.url) {
+      options.target = detection.url;
+      options.detectedTarget = true;
+    } else if (detection.candidates.length > 1) {
+      console.error(`[pin-note] ${detection.reason} для ${displayPath(root)}:`);
+      for (const candidate of detection.candidates) {
+        console.error(`  ${candidate.url} — ${candidate.command}`);
+      }
+      console.error('[pin-note] Укажи нужный через --target или отключи поиск через --no-detect.');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (options.target && !options.detectedTarget && !options.dataDir && (await isPinNoteCheckout(root))) {
+    console.error('[pin-note] В режиме --target первым аргументом указывается корень проекта.');
+    console.error(`[pin-note] Сейчас используется папка PinNote: ${displayPath(root)}`);
+    console.error('[pin-note] Пример: pin-note ~/p/portfolio-deepsick --target http://localhost:4322');
+    console.error('[pin-note] Если папка PinNote выбрана осознанно, укажи --data-dir явно.');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!options.target && !hasIndex) {
+    if (detection?.reason) {
+      console.warn(`[pin-note] ${detection.reason}.`);
+      console.warn('[pin-note] Запусти dev-сервер или укажи --target <url>, либо передай папку со сборкой.');
+    } else {
+      console.warn(`[pin-note] В ${displayPath(root)} нет index.html — проверь путь.`);
+    }
   }
 
   let review;
@@ -179,6 +238,7 @@ async function main() {
       root,
       dataDir: options.dataDir ? resolve(options.dataDir) : undefined,
       sourceRoot: options.sourceDir ? resolve(options.sourceDir) : undefined,
+      target: options.target || undefined,
       watch: options.watch,
       spa: options.spa,
     });
@@ -207,7 +267,12 @@ async function main() {
 
   console.log('');
   console.log('  PinNote');
-  console.log(`  Сайт:      ${displayPath(root)}`);
+  if (options.target) {
+    console.log(`  Dev:       ${options.target}${options.detectedTarget ? ' (автоопределён)' : ''}`);
+    console.log(`  Проект:    ${displayPath(root)}`);
+  } else {
+    console.log(`  Сайт:      ${displayPath(root)}`);
+  }
   console.log(`  Review:    ${listening.url}`);
   console.log(`  Комментарии: ${displayPath(review.store.commentsFile)}`);
   console.log('  Остановить: Ctrl+C');
