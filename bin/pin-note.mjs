@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { access, readFile, stat } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { detectDevServer } from '../src/dev-server.mjs';
 import { createReviewServer } from '../src/server.mjs';
+import { ReviewStore } from '../src/store.mjs';
+import {
+  formatCommentMarkdown,
+  formatTaskDate,
+  taskStatusLabel,
+  taskTag,
+} from '../src/shared.mjs';
 
 const HELP = `PinNote 0.1.0
 
@@ -11,17 +18,43 @@ const HELP = `PinNote 0.1.0
 
 Использование:
   pin-note [directory] [options]
+  pin-note tasks <command> [options]
+  pin-note comments <command> [options]
 
 Аргументы:
   directory           Папка со статическим сайтом или корень проекта
                       (по умолчанию текущая; в ней ищется dev-сервер)
 
-Опции:
+Команды задач:
+  tasks list          Список задач
+  tasks current       Текущая активная задача
+  tasks show <tag>    Задача и её комментарии
+  tasks submit        Отправить задачу на проверку (для агента)
+  tasks close <tag>   Закрыть задачу (только человек, нужен --confirm)
+  tasks update <tag>  Изменить короткое описание (--description)
+  tasks delete <tag>  Удалить переписку задачи (нужен --confirm)
+
+Команды комментариев:
+  comments list       Список комментариев (--task current|all|T-1, --status open)
+  comments show <id>  Показать комментарий
+  comments resolve <id> --resolution "..."  Отметить решённым
+  comments set-status <id> --status orphaned|wontfix --resolution "..."
+  comments reopen <id> Вернуть комментарий в текущую задачу
+
+Опции команд:
+      --project <dir> Корень проекта (по умолчанию текущая папка)
+      --data-dir <dir> Каталог данных (по умолчанию <project>/.review)
+      --task <ref>    current, all, T-1 или id задачи
+      --json          Машиночитаемый вывод
+      --confirm       Подтвердить опасную операцию
+  -h, --help
+
+Опции сервера:
   -p, --port <port>   Порт review-сервера (по умолчанию 4174)
       --host <host>   Хост (по умолчанию 127.0.0.1)
       --target <url>  Явно указать адрес dev-сервера (например http://localhost:5173)
       --no-detect     Не искать dev-сервер автоматически, работать как статический сервер
-      --data-dir <dir> Каталог для comments.json и feedback.md (по умолчанию <directory>/.review)
+      --data-dir <dir> Каталог для comments.json, feedback.md и AGENT.md (по умолчанию <directory>/.review)
       --source-dir <dir> Где искать исходники для подсказок (по умолчанию <directory>)
       --spa           Отдавать index.html для неизвестных HTML-маршрутов
       --no-open       Не открывать браузер автоматически
@@ -168,10 +201,363 @@ function openBrowser(url) {
   }
 }
 
+function parseCommandArgs(argv) {
+  const options = {
+    project: process.cwd(),
+    dataDir: null,
+    task: null,
+    status: null,
+    json: false,
+    confirm: false,
+    description: undefined,
+    resolution: undefined,
+    resolutionStdin: false,
+    help: false,
+  };
+  const positional = [];
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--json') {
+      options.json = true;
+      continue;
+    }
+    if (arg === '--confirm' || arg === '-y') {
+      options.confirm = true;
+      continue;
+    }
+    if (arg === '--resolution-stdin') {
+      options.resolutionStdin = true;
+      continue;
+    }
+    if (arg === '--project' || arg === '--data-dir' || arg === '--task' || arg === '--status' || arg === '--description' || arg === '--resolution') {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('-')) throw new Error(`Не указано значение для ${arg}`);
+      if (arg === '--project') options.project = value;
+      if (arg === '--data-dir') options.dataDir = value;
+      if (arg === '--task') options.task = value;
+      if (arg === '--status') options.status = value;
+      if (arg === '--description') options.description = value;
+      if (arg === '--resolution') options.resolution = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) throw new Error(`Неизвестная опция: ${arg}`);
+    positional.push(arg);
+  }
+
+  return { options, positional };
+}
+
+async function openCommandStore(options) {
+  const root = resolve(options.project || process.cwd());
+  if (!(await isDirectory(root))) throw new Error(`Папка не найдена: ${root}`);
+  const dataDir = options.dataDir ? resolve(options.dataDir) : join(root, '.review');
+  return new ReviewStore({ root, dataDir, sourceRoot: root });
+}
+
+function printTaskLine(task) {
+  const counts = task.counts || {};
+  const done = (counts.resolved || 0) + (counts.wontfix || 0);
+  const total = task.total || 0;
+  const description = task.description ? ` · ${task.description}` : '';
+  return `${taskTag(task)} · ${formatTaskDate(task.createdAt)} · ${taskStatusLabel(task.status)} · ${done}/${total}${description}`;
+}
+
+function printCommentLine(comment, task) {
+  const tag = task ? taskTag(task) : '';
+  return `${comment.id} · ${tag ? `${tag} · ` : ''}${comment.status} · ${comment.comment}`;
+}
+
+async function readStdinText() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
+}
+
+function reportCommandError(err, json) {
+  if (json) {
+    process.stdout.write(
+      `${JSON.stringify({ error: err.message, details: err.details || null }, null, 2)}\n`
+    );
+  } else {
+    console.error(`[pin-note] ${err.message}`);
+    for (const blocker of err.details?.blockers || []) {
+      console.error(`  ${blocker.id} · ${blocker.status} · ${blocker.comment}`);
+    }
+  }
+  process.exitCode = 1;
+}
+
+async function runTasksCommand(argv) {
+  const subcommand = argv[0];
+  if (!subcommand || subcommand === '--help' || subcommand === '-h') {
+    console.log(`pin-note tasks <command> [options]
+
+  list          Список задач
+  current       Текущая активная задача
+  show <tag>    Задача и её комментарии
+  submit [tag]  Отправить задачу на проверку (по умолчанию текущую)
+  close <tag>   Закрыть задачу (нужен --confirm)
+  update <tag> --description "..."  Изменить описание
+  delete <tag>  Удалить переписку задачи (нужен --confirm)
+
+Опции: --project <dir>, --data-dir <dir>, --task <ref>, --description "...", --json`);
+    return;
+  }
+
+  let options;
+  let positional;
+  try {
+    ({ options, positional } = parseCommandArgs(argv.slice(1)));
+  } catch (err) {
+    reportCommandError(err, false);
+    return;
+  }
+  if (options.help) {
+    console.log('Смотри pin-note tasks --help');
+    return;
+  }
+
+  try {
+    const store = await openCommandStore(options);
+    if (subcommand === 'list') {
+      const tasks = await store.listTasks();
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ tasks }, null, 2)}\n`);
+      } else if (tasks.length === 0) {
+        console.log('Задач нет');
+      } else {
+        for (const task of tasks) console.log(printTaskLine(task));
+      }
+      return;
+    }
+    if (subcommand === 'current') {
+      const task = await store.currentTask();
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task }, null, 2)}\n`);
+      } else if (task) {
+        console.log(printTaskLine(task));
+      } else {
+        console.log('Нет активной задачи');
+      }
+      return;
+    }
+    if (subcommand === 'show') {
+      const taskRef = positional[0] || options.task || 'current';
+      const task = await store.getTask(taskRef);
+      if (!task) throw new Error(`Задача не найдена: ${taskRef}`);
+      const state = await store.read();
+      const comments = state.comments.filter((comment) => comment.taskId === task.id);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task, comments }, null, 2)}\n`);
+      } else {
+        console.log(printTaskLine(task));
+        if (comments.length === 0) console.log('  комментариев нет');
+        for (const comment of comments) console.log(`  ${printCommentLine(comment, task)}`);
+      }
+      return;
+    }
+    if (subcommand === 'submit') {
+      const taskRef = positional[0] || options.task || 'current';
+      const task = await store.submitTask(taskRef);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task }, null, 2)}\n`);
+      } else {
+        console.log(`${taskTag(task)} отправлена на проверку. Закрыть её может человек.`);
+      }
+      return;
+    }
+    if (subcommand === 'close') {
+      if (!options.confirm) throw new Error('Для закрытия задачи добавь --confirm');
+      const taskRef = positional[0] || options.task || 'current';
+      const task = await store.closeTask(taskRef);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task }, null, 2)}\n`);
+      } else {
+        console.log(`${taskTag(task)} закрыта`);
+      }
+      return;
+    }
+    if (subcommand === 'update') {
+      const taskRef = positional[0] || options.task;
+      if (!taskRef) throw new Error('Укажи задачу: T-1 или id');
+      const description =
+        options.description !== undefined
+          ? options.description
+          : positional.slice(1).join(' ').trim();
+      if (description === undefined || description === '') {
+        throw new Error('Укажи --description "короткое описание"');
+      }
+      const task = await store.updateTask(taskRef, { description });
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task }, null, 2)}\n`);
+      } else {
+        console.log(`${taskTag(task)} · ${task.description}`);
+      }
+      return;
+    }
+    if (subcommand === 'delete') {
+      if (!options.confirm) throw new Error('Для удаления переписки добавь --confirm');
+      const taskRef = positional[0] || options.task;
+      if (!taskRef) throw new Error('Укажи задачу: T-1 или id');
+      const result = await store.removeTask(taskRef);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        console.log(`${taskTag(result.task)} удалена · комментариев: ${result.deletedComments}`);
+      }
+      return;
+    }
+    throw new Error(`Неизвестная команда tasks: ${subcommand}`);
+  } catch (err) {
+    reportCommandError(err, options.json);
+  }
+}
+
+async function runCommentsCommand(argv) {
+  const subcommand = argv[0];
+  if (!subcommand || subcommand === '--help' || subcommand === '-h') {
+    console.log(`pin-note comments <command> [options]
+
+  list [--task current|all|T-1] [--status open]
+  show <id>
+  resolve <id> --resolution "..." | --resolution-stdin
+  set-status <id> --status orphaned|wontfix --resolution "..."
+  reopen <id>
+
+Опции: --project <dir>, --data-dir <dir>, --json`);
+    return;
+  }
+
+  let options;
+  let positional;
+  try {
+    ({ options, positional } = parseCommandArgs(argv.slice(1)));
+  } catch (err) {
+    reportCommandError(err, false);
+    return;
+  }
+  if (options.help) {
+    console.log('Смотри pin-note comments --help');
+    return;
+  }
+
+  try {
+    const store = await openCommandStore(options);
+    if (subcommand === 'list') {
+      const state = await store.read();
+      const taskRef = options.task || 'current';
+      let task = null;
+      let comments = state.comments;
+      if (taskRef !== 'all') {
+        task = await store.getTask(taskRef);
+        if (!task && taskRef !== 'current') throw new Error(`Задача не найдена: ${taskRef}`);
+        comments = task ? comments.filter((comment) => comment.taskId === task.id) : [];
+      }
+      if (options.status) {
+        comments = comments.filter((comment) => comment.status === options.status);
+      }
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ task, comments }, null, 2)}\n`);
+      } else if (comments.length === 0) {
+        console.log('Комментариев нет');
+      } else {
+        for (const comment of comments) console.log(printCommentLine(comment, task));
+      }
+      return;
+    }
+    if (subcommand === 'show') {
+      const id = positional[0];
+      if (!id) throw new Error('Укажи id комментария');
+      const state = await store.read();
+      const comment = state.comments.find((item) => item.id === id);
+      if (!comment) throw new Error(`Комментарий не найден: ${id}`);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ comment }, null, 2)}\n`);
+      } else {
+        console.log(formatCommentMarkdown(comment));
+      }
+      return;
+    }
+    if (subcommand === 'resolve') {
+      const id = positional[0];
+      if (!id) throw new Error('Укажи id комментария');
+      const resolution =
+        options.resolution !== undefined
+          ? options.resolution
+          : options.resolutionStdin
+            ? await readStdinText()
+            : undefined;
+      if (resolution === undefined || !resolution.trim()) {
+        throw new Error('Укажи --resolution "..." или --resolution-stdin');
+      }
+      const comment = await store.update(id, { status: 'resolved', resolution });
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ comment }, null, 2)}\n`);
+      } else {
+        console.log(`${comment.id} · resolved`);
+      }
+      return;
+    }
+    if (subcommand === 'set-status') {
+      const id = positional[0];
+      if (!id) throw new Error('Укажи id комментария');
+      if (!options.status) throw new Error('Укажи --status');
+      const resolution =
+        options.resolution !== undefined
+          ? options.resolution
+          : options.resolutionStdin
+            ? await readStdinText()
+            : undefined;
+      if (['resolved', 'wontfix', 'orphaned'].includes(options.status) && !resolution?.trim()) {
+        throw new Error('Для этого статуса укажи --resolution "..."');
+      }
+      const patch = { status: options.status };
+      if (resolution !== undefined) patch.resolution = resolution;
+      const comment = await store.update(id, patch);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ comment }, null, 2)}\n`);
+      } else {
+        console.log(`${comment.id} · ${comment.status}`);
+      }
+      return;
+    }
+    if (subcommand === 'reopen') {
+      const id = positional[0];
+      if (!id) throw new Error('Укажи id комментария');
+      const result = await store.reopenComment(id);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        console.log(`${result.comment.id} · open · ${result.cloned ? 'создана копия в текущей задаче' : 'возвращён в работу'}`);
+      }
+      return;
+    }
+    throw new Error(`Неизвестная команда comments: ${subcommand}`);
+  } catch (err) {
+    reportCommandError(err, options.json);
+  }
+}
+
 async function main() {
+  const rawArgv = process.argv.slice(2);
+  if (rawArgv[0] === 'tasks' || rawArgv[0] === 'task') {
+    await runTasksCommand(rawArgv.slice(1));
+    return;
+  }
+  if (rawArgv[0] === 'comments') {
+    await runCommentsCommand(rawArgv.slice(1));
+    return;
+  }
+
   let parsed;
   try {
-    parsed = parseArgs(process.argv.slice(2));
+    parsed = parseArgs(rawArgv);
   } catch (err) {
     console.error(`[pin-note] ${err.message}`);
     console.error('Попробуй --help');

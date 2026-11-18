@@ -400,6 +400,225 @@ button {
   color: var(--pn-accent);
 }
 
+.pn-taskbar {
+  display: grid;
+  gap: 8px;
+  padding: 10px 18px 12px;
+  border-bottom: 1px solid var(--pn-border);
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.pn-taskbar-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pn-task-chip {
+  min-width: 0;
+  padding: 2px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 226, 184, 0.35);
+  border-radius: 999px;
+  background: rgba(126, 226, 184, 0.1);
+  color: var(--pn-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pn-task-chip:hover {
+  background: rgba(126, 226, 184, 0.18);
+}
+
+.pn-task-chip-small {
+  padding: 0 5px;
+  border-color: var(--pn-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--pn-muted);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.pn-task-status {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--pn-amber);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.pn-task-status.status-active {
+  background: rgba(126, 226, 184, 0.12);
+  color: var(--pn-accent);
+}
+
+.pn-task-status.status-review {
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--pn-amber);
+}
+
+.pn-task-status.status-closed {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--pn-slate);
+}
+
+.pn-task-progress {
+  margin-left: auto;
+  color: var(--pn-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pn-task-description {
+  width: 100%;
+  min-height: 29px;
+  padding: 4px 8px;
+  border: 1px solid var(--pn-border);
+  border-radius: 7px;
+  background: #0b0e13;
+  color: var(--pn-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.pn-task-description::placeholder {
+  color: var(--pn-dim);
+}
+
+.pn-task-description:focus {
+  border-color: rgba(126, 226, 184, 0.55);
+  outline: 2px solid rgba(126, 226, 184, 0.14);
+  outline-offset: 0;
+}
+
+.pn-task-description:disabled {
+  opacity: 0.45;
+}
+
+.pn-taskbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pn-tasklist {
+  max-height: 46%;
+  overflow: auto;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--pn-border);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.pn-tasklist-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--pn-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.pn-tasklist-head strong {
+  color: var(--pn-text);
+  font-size: 11px;
+}
+
+.pn-tasklist-empty {
+  padding: 12px;
+  color: var(--pn-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
+.pn-task-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--pn-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pn-task-row + .pn-task-row {
+  margin-top: 3px;
+}
+
+.pn-task-row:hover {
+  border-color: var(--pn-border);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.pn-task-row.is-selected {
+  border-color: rgba(126, 226, 184, 0.45);
+  background: rgba(126, 226, 184, 0.07);
+}
+
+.pn-task-row.is-active-task .pn-task-row-tag {
+  color: var(--pn-accent);
+}
+
+.pn-task-row-tag {
+  color: var(--pn-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.pn-task-row-main {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.pn-task-row-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+
+.pn-task-row-meta {
+  color: var(--pn-dim);
+  font-size: 10px;
+}
+
+.pn-task-row-status {
+  color: var(--pn-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.pn-task-row-status.status-active {
+  color: var(--pn-accent);
+}
+
+.pn-task-row-status.status-review {
+  color: var(--pn-amber);
+}
+
+.pn-task-row-status.status-closed {
+  color: var(--pn-slate);
+}
+
 .pn-list {
   flex: 1;
   overflow: auto;

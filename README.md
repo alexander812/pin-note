@@ -44,11 +44,11 @@ npm run demo
 
 1. `npm start -- <папка>` поднимает Node-сервер и раздаёт статический сайт из указанной папки. Если в этой папке запущен dev-сервер, PinNote находит его сам и проксирует; `--target <url>` задаёт адрес явно, `--no-detect` отключает поиск.
 2. Перед `</body>` сервер на лету вставляет `client.js` — и в статический HTML, и в HTML, полученный от dev-сервера. Сам `index.html` не меняется.
-3. Клик по элементу открывает поповер. Можно прикрепить скриншот элемента с пометками; комментарий уходит на `POST /__review/comments`.
-4. Сервер пишет `.review/comments.json`, сохраняет скриншоты в `.review/screenshots` и генерирует `.review/feedback.md`.
-5. Агент читает `comments.json` или `feedback.md`, правит `src/*`, собирает сайт.
+3. Клик по элементу открывает поповер. Можно прикрепить скриншот элемента с пометками; комментарий уходит на `POST /__review/comments` и попадает в активную задачу.
+4. Сервер пишет `.review/comments.json`, сохраняет скриншоты в `.review/screenshots` и генерирует `.review/feedback.md` для текущей задачи.
+5. Агент читает задачу через `pin-note tasks current`, правит `src/*`, собирает сайт.
 6. В статическом режиме сервер замечает изменение HTML/CSS/JS и перезагружает вкладку по SSE. В режиме прокси перезагрузкой и HMR занимается dev-сервер; WebSocket-соединения тоже проксируются.
-7. Агент обновляет `status` и `resolution` в `comments.json`; сервер подхватывает изменения и обновляет открытую вкладку.
+7. Агент обновляет `status` и `resolution` комментариев, затем выполняет `pin-note tasks submit`. Задача переходит в «На проверке»; человек проверяет результат и закрывает её кнопкой в панели.
 
 ## Что умеет
 
@@ -56,6 +56,8 @@ npm run demo
 - `Alt/Option+клик` — подниматься по дереву элементов; повторный клик выбирает родителя выше.
 - Пины на странице, панель со списком, фильтры. Фильтр «Открытые»/«Решённые» применяется и к списку, и к пинам на странице.
 - Статусы `open`, `resolved`, `wontfix`, `orphaned`.
+- Задачи: номер, дата `dd.mm.yy`, короткое описание, статусы «В работе», «На проверке», «Закрыта». Новые комментарии попадают в активную задачу, после `tasks submit` — в следующую.
+- Список задач, возврат комментариев в текущую задачу и удаление переписки задачи.
 - Сохранение в `.review/comments.json` и генерация `.review/feedback.md`.
 - Копирование Markdown для вставки в чат агенту.
 - Автообновление комментариев и страницы через SSE.
@@ -85,6 +87,7 @@ npm run demo
 ```json
 {
   "id": "c_m3k2_9f1a2b",
+  "taskId": "t_m3k2_1a2b",
   "status": "open",
   "comment": "Заголовок слишком близко к графику, добавь 24px",
   "url": "http://127.0.0.1:4174/#2015",
@@ -118,7 +121,7 @@ npm run demo
 
 `sourceHints` — эвристика, а не гарантия. Агент должен проверить совпадение по селектору, тексту и HTML. Если у комментария есть `screenshot.file`, файл лежит относительно `.review`; на изображении могут быть цветные пометки.
 
-`feedback.md` — человекочитаемая версия того же набора. Он генерируется сервером; редактировать его вручную не нужно. Источник правды — `comments.json`.
+`feedback.md` — человекочитаемая версия текущей (или последней) задачи. Он генерируется сервером; редактировать его вручную не нужно. Источник правды — `comments.json`.
 
 Добавь `.review/` в `.gitignore` целевого проекта, если не хочешь коммитить отзывы вместе с кодом.
 
@@ -127,23 +130,26 @@ npm run demo
 В `.review/AGENT.md` сервер создаёт памятку. Кратко:
 
 ```text
-Прочитай .review/comments.json.
-Для каждого комментария со статусом open найди исходник по anchor.selector,
-anchor.text, anchor.html и sourceHints. Если есть screenshot.file, открой
-изображение относительно .review и учти пометки. Внеси минимальную правку.
-После проверки поставь status: "resolved" и добавь resolution.
-Если элемент не найден — status: "orphaned" и объяснение в resolution.
-Не удаляй комментарии и не меняй несвязанные поля.
+1. Посмотри текущую задачу: pin-note tasks current --json.
+2. Возьми открытые комментарии: pin-note comments list --task current --status open --json.
+3. Найди исходник по anchor.selector, anchor.text, anchor.html и sourceHints.
+   Если есть screenshot.file, открой изображение относительно .review.
+4. Внеси минимальную правку.
+5. Отметь результат: pin-note comments resolve <id> --resolution "...".
+6. Когда все комментарии разобраны — pin-note tasks submit.
+   Не закрывай задачу: это делает человек.
 ```
 
 Можно попросить агента:
 
 ```text
-Разбери открытые комментарии из .review/comments.json.
-После правок сделай npm run build и обнови статусы в JSON.
+Разбери открытые комментарии текущей задачи PinNote.
+После правок сделай npm run build и выполни pin-note tasks submit.
 ```
 
-Сервер сам обновит `feedback.md` и пришлёт изменения в открытую вкладку.
+Сервер сам обновит `feedback.md` и пришлёт изменения в открытую вкладку. Задача
+переходит в «На проверке»: новые комментарии уже попадают в следующую задачу,
+а закрытие остаётся за человеком.
 
 ## CLI
 
@@ -156,7 +162,7 @@ pin-note [directory] [options]
       --host <host>   Хост (по умолчанию 127.0.0.1)
       --target <url>  Явно указать адрес dev-сервера (например http://localhost:5173)
       --no-detect     Не искать dev-сервер автоматически
-      --data-dir <dir> Каталог для comments.json и feedback.md (относительно текущей папки)
+      --data-dir <dir> Каталог для comments.json, feedback.md и AGENT.md (относительно текущей папки)
       --source-dir <dir> Где искать исходники для подсказок (по умолчанию <directory>)
       --spa           Отдавать index.html для неизвестных HTML-маршрутов (статический режим)
       --no-open       Не открывать браузер
@@ -164,6 +170,27 @@ pin-note [directory] [options]
   -h, --help
   -v, --version
 ```
+
+Команды задач и комментариев (работают без запущенного сервера):
+
+```text
+pin-note tasks list [--json]
+pin-note tasks current [--json]
+pin-note tasks show T-1 [--json]
+pin-note tasks submit [T-1]        # агент отправляет задачу на проверку
+pin-note tasks close T-1 --confirm # закрывает человек
+pin-note tasks update T-1 --description "Короткое описание"
+pin-note tasks delete T-1 --confirm
+
+pin-note comments list [--task current|all|T-1] [--status open] [--json]
+pin-note comments show <id> [--json]
+pin-note comments resolve <id> --resolution "..."
+pin-note comments set-status <id> --status orphaned|wontfix --resolution "..."
+pin-note comments reopen <id>
+```
+
+Если `pin-note` не установлен в `PATH`, используй
+`node ~/p/pin-note/bin/pin-note.mjs ...` или выполни `npm link` в папке PinNote.
 
 Пример с отдельным каталогом данных:
 
@@ -187,12 +214,20 @@ node bin/pin-note.mjs ~/p/my-app --target http://localhost:5173
 
 | Метод | Путь | Назначение |
 | --- | --- | --- |
-| `GET` | `/__review/config` | Имя проекта, пути к файлам, возможности |
+| `GET` | `/__review/config` | Имя проекта, пути к файлам, текущая задача, возможности |
+| `GET` | `/__review/state` | Задачи и комментарии |
+| `GET` | `/__review/tasks` | Список задач со сводкой |
+| `GET` | `/__review/tasks/:ref` | Задача и её комментарии |
+| `PATCH` | `/__review/tasks/:ref` | Изменить `description` |
+| `POST` | `/__review/tasks/:ref/submit` | Отправить задачу на проверку |
+| `POST` | `/__review/tasks/:ref/close` | Закрыть задачу |
+| `DELETE` | `/__review/tasks/:ref` | Удалить задачу и её комментарии |
 | `GET` | `/__review/comments` | Весь store |
 | `POST` | `/__review/comments` | Создать комментарий |
 | `PATCH` | `/__review/comments/:id` | Обновить `status`, `comment`, `resolution` |
+| `POST` | `/__review/comments/:id/reopen` | Вернуть комментарий в текущую задачу |
 | `DELETE` | `/__review/comments/:id` | Удалить комментарий |
-| `GET` | `/__review/export.md` | Markdown; `?status=open` для фильтра |
+| `GET` | `/__review/export.md` | Markdown; `?status=open&task=current` для фильтра |
 | `POST` | `/__review/screenshots` | Загрузить PNG/JPEG/WebP скриншот |
 | `GET` | `/__review/screenshots/:name` | Отдать скриншот |
 | `GET` | `/__review/events` | SSE: `comments`, `reload` |
@@ -208,7 +243,7 @@ bin/pin-note.mjs        CLI
 src/server.mjs          статический сервер и прокси, инъекция клиента, API, SSE, watcher
 src/proxy.mjs           reverse proxy для dev-сервера, HTML и WebSocket
 src/dev-server.mjs      поиск запущенного dev-сервера по папке проекта
-src/store.mjs           чтение/запись comments.json, feedback.md, валидация
+src/store.mjs           чтение/запись comments.json, задачи, feedback.md, валидация
 src/source-hints.mjs    эвристический поиск исходников
 src/shared.mjs          формат Markdown и статусы
 src/client.js           Shadow DOM UI

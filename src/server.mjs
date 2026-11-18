@@ -505,6 +505,7 @@ export async function createReviewServer(options = {}) {
         feedbackFile: relative(root, store.feedbackFile),
         instructionsFile: relative(root, store.instructionsFile),
         screenshotsDir: relative(root, store.screenshotsDir),
+        activeTask: await store.currentTask(),
         capabilities: {
           sourceHints: true,
           screenshots: true,
@@ -513,6 +514,64 @@ export async function createReviewServer(options = {}) {
         },
       });
       return;
+    }
+
+    if (method === 'GET' && route === 'state') {
+      sendJson(response, 200, await store.read());
+      return;
+    }
+
+    if (method === 'GET' && route === 'tasks') {
+      sendJson(response, 200, {
+        tasks: await store.listTasks(),
+        activeTask: await store.currentTask(),
+      });
+      return;
+    }
+
+    const taskActionRoute = /^tasks\/([^/]+)\/(submit|close)$/.exec(route);
+    if (taskActionRoute && method === 'POST') {
+      assertSameOrigin(request);
+      const taskRef = decodeURIComponent(taskActionRoute[1]);
+      const action = taskActionRoute[2];
+      const task = action === 'submit' ? await store.submitTask(taskRef) : await store.closeTask(taskRef);
+      notifyComments();
+      sendJson(response, 200, { task });
+      return;
+    }
+
+    const taskRoute = /^tasks\/([^/]+)$/.exec(route);
+    if (taskRoute) {
+      const taskRef = decodeURIComponent(taskRoute[1]);
+      if (method === 'GET') {
+        const task = await store.getTask(taskRef);
+        if (!task) {
+          sendJson(response, 404, { error: 'Задача не найдена' });
+          return;
+        }
+        const state = await store.read();
+        sendJson(response, 200, {
+          task,
+          comments: state.comments.filter((comment) => comment.taskId === task.id),
+        });
+        return;
+      }
+      if (method === 'PATCH') {
+        assertSameOrigin(request);
+        requireJson(request);
+        const body = await readJson(request);
+        const task = await store.updateTask(taskRef, body);
+        notifyComments();
+        sendJson(response, 200, { task });
+        return;
+      }
+      if (method === 'DELETE') {
+        assertSameOrigin(request);
+        const result = await store.removeTask(taskRef);
+        notifyComments();
+        sendJson(response, 200, result);
+        return;
+      }
     }
 
     if (method === 'POST' && route === 'screenshots') {
@@ -575,7 +634,8 @@ export async function createReviewServer(options = {}) {
 
     if (method === 'GET' && route === 'export.md') {
       const status = searchParams.get('status') || undefined;
-      const markdown = await store.exportMarkdown({ status });
+      const task = searchParams.get('task') || 'current';
+      const markdown = await store.exportMarkdown({ status, task });
       sendText(response, 200, markdown, 'text/markdown; charset=utf-8');
       return;
     }
@@ -596,8 +656,19 @@ export async function createReviewServer(options = {}) {
       requireJson(request);
       const body = await readJson(request);
       const comment = await store.add(body);
+      const task = await store.getTask(comment.taskId);
       notifyComments();
-      sendJson(response, 201, { comment });
+      sendJson(response, 201, { comment, task });
+      return;
+    }
+
+    const reopenRoute = /^comments\/([^/]+)\/reopen$/.exec(route);
+    if (reopenRoute && method === 'POST') {
+      assertSameOrigin(request);
+      const id = decodeURIComponent(reopenRoute[1]);
+      const result = await store.reopenComment(id);
+      notifyComments();
+      sendJson(response, 200, result);
       return;
     }
 
@@ -644,7 +715,9 @@ export async function createReviewServer(options = {}) {
         console.error('[pin-note]', err);
       }
       if (!response.headersSent) {
-        sendJson(response, status, { error: err?.message || 'Internal Server Error' });
+        const payload = { error: err?.message || 'Internal Server Error' };
+        if (err?.details) payload.details = err.details;
+        sendJson(response, status, payload);
       } else {
         response.destroy();
       }

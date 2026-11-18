@@ -14,12 +14,54 @@ export const STATUS_ORDER = {
   wontfix: 3,
 };
 
+export const TASK_STATUSES = ['active', 'review', 'closed'];
+
+export const TASK_STATUS_LABELS = {
+  active: 'В работе',
+  review: 'На проверке',
+  closed: 'Закрыта',
+};
+
 export function statusLabel(status) {
   return STATUS_LABELS[status] || status || 'Неизвестно';
 }
 
+export function taskStatusLabel(status) {
+  return TASK_STATUS_LABELS[status] || status || 'Неизвестно';
+}
+
 export function isOpenStatus(status) {
   return status === 'open' || status === 'orphaned';
+}
+
+export function taskTag(task) {
+  const number = Number(task?.number);
+  return Number.isFinite(number) && number > 0 ? `T-${number}` : '';
+}
+
+export function formatTaskDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear()).slice(-2);
+  return `${day}.${month}.${year}`;
+}
+
+export function taskTitle(task, { withDescription = true } = {}) {
+  if (!task) return '';
+  const parts = [taskTag(task), formatTaskDate(task.createdAt)].filter(Boolean);
+  const description = String(task.description || '').replace(/\s+/g, ' ').trim();
+  if (withDescription && description) parts.push(description);
+  return parts.join(' · ');
+}
+
+export function shortDescription(value, limit = 120) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 function plural(count, one, few, many) {
@@ -145,10 +187,18 @@ export function formatAllMarkdown(comments, meta = {}) {
   const wontfix = list.filter((comment) => comment.status === 'wontfix');
   const project = meta.project || 'website';
   const updatedAt = meta.updatedAt || new Date().toISOString();
+  const task = meta.task || null;
   const sections = [];
 
   sections.push('# Комментарии к сайту', '');
   sections.push(`- Проект: ${inlineCode(project)}`);
+  if (task) {
+    sections.push(
+      `- Задача: ${inlineCode(taskTag(task))} · ${formatTaskDate(task.createdAt)}` +
+        (task.description ? ` · ${oneLine(task.description, 160)}` : '')
+    );
+    sections.push(`- Статус задачи: ${taskStatusLabel(task.status)}`);
+  }
   sections.push(`- Обновлено: ${updatedAt}`);
   sections.push(
     `- Всего: ${list.length} · открытых: ${open.length} · не найдено: ${orphaned.length} · ` +
@@ -157,8 +207,9 @@ export function formatAllMarkdown(comments, meta = {}) {
   sections.push('');
   sections.push(
     'Инструкция для агента: разбери открытые комментарии, найди исходники по селектору, тексту, ' +
-      'HTML и подсказкам, внеси минимальные правки. После проверки обнови `status` и `resolution` ' +
-      'в `.review/comments.json`. Не удаляй комментарии и не меняй чужие поля.'
+      'HTML и подсказкам, внеси минимальные правки. После проверки обнови `status` и `resolution`. ' +
+      'Когда все комментарии задачи разобраны, выполни `pin-note tasks submit`. Не закрывай задачу ' +
+      'самостоятельно и не удаляй комментарии.'
   );
 
   const blocks = [
