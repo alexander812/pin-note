@@ -5,7 +5,6 @@ import {
   isOpenStatus,
   statusLabel,
   taskStatusLabel,
-  taskTag,
   taskTitle,
 } from './shared.js';
 
@@ -25,52 +24,79 @@ const STATIC_HTML = `
   <div class="pn-pins" data-role="pins"></div>
   <div class="pn-toolbar" role="toolbar" aria-label="Комментарии к сайту">
     <button type="button" class="pn-grip" data-role="grip" aria-label="Перетащить панель" title="Перетащить">⠿</button>
-    <button type="button" class="pn-btn pn-btn-primary" data-action="mode" aria-pressed="false"></button>
-    <button type="button" class="pn-btn pn-btn-ghost" data-action="panel" aria-label="Открыть список комментариев">
-      <span class="pn-count" data-role="count">0</span>
-      <span>Комментарии</span>
+    <button type="button" class="pn-btn pn-mode-btn" data-action="mode" aria-pressed="false" aria-label="Комментировать" title="Комментировать">
+      <svg class="pn-mode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9.9 9.9 0 0 1-4.2-.9L3 20.8l1.6-4.9A8.5 8.5 0 1 1 21 11.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <span class="pn-count" data-role="count" aria-live="polite">0</span>
+    <button type="button" class="pn-btn pn-panel-toggle" data-action="panel" aria-label="Открыть панель комментариев" aria-expanded="false" title="Открыть панель">
+      <svg class="pn-panel-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m14 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
     </button>
   </div>
   <aside class="pn-panel" data-role="panel" aria-label="Комментарии" hidden>
     <header class="pn-panel-head">
-      <div>
-        <div class="pn-eyebrow">Review mode</div>
-        <h2>Комментарии <span data-role="panel-count"></span></h2>
+      <div class="pn-head-actions">
+        <button type="button" class="pn-icon-btn" data-action="refresh" aria-label="Обновить комментарии" title="Обновить">
+          <svg class="pn-refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button type="button" class="pn-icon-btn" data-action="close-panel" aria-label="Закрыть">×</button>
       </div>
-      <button type="button" class="pn-icon-btn" data-action="close-panel" aria-label="Закрыть">×</button>
     </header>
+    <div class="pn-tabs" role="tablist" aria-label="Задачи">
+      <button type="button" class="pn-tab" data-action="task-tab" data-id="all" role="tab" aria-selected="false">Все задачи</button>
+      <button type="button" class="pn-tab is-active" data-action="task-tab" data-id="current" role="tab" aria-selected="true">Текущая</button>
+    </div>
     <section class="pn-taskbar" data-role="taskbar">
-      <div class="pn-taskbar-top">
-        <button type="button" class="pn-task-chip" data-action="toggle-tasks" data-role="task-chip" title="Открыть список задач"></button>
-        <span class="pn-task-status" data-role="task-status"></span>
-        <span class="pn-task-progress" data-role="task-progress"></span>
+      <div class="pn-task-filters" data-role="task-filters">
+        <svg class="pn-filter-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M4 5h16l-6.2 7.3v5.2l-3.6 1.8v-7L4 5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        </svg>
+        <div class="pn-filters" role="tablist" aria-label="Фильтр комментариев">
+          <button type="button" class="pn-chip" data-action="filter" data-filter="open">Активные</button>
+          <button type="button" class="pn-chip" data-action="filter" data-filter="resolved">Решённые</button>
+          <button type="button" class="pn-chip is-active" data-action="filter" data-filter="all">Все</button>
+        </div>
       </div>
-      <input
-        class="pn-task-description"
-        data-role="task-description"
-        maxlength="120"
-        placeholder="Короткое описание задачи"
-        aria-label="Короткое описание задачи"
-      >
-      <div class="pn-taskbar-actions">
-        <button type="button" class="pn-action" data-action="toggle-tasks">Задачи</button>
-        <button type="button" class="pn-action" data-action="show-current-task">К текущей</button>
-        <button type="button" class="pn-action" data-action="close-task" title="Закрыть текущую задачу">Закрыть</button>
-        <button type="button" class="pn-action pn-action-danger" data-action="delete-task" title="Удалить переписку задачи">Удалить</button>
+      <div class="pn-task-head">
+        <div class="pn-task-title-row">
+          <h3 class="pn-task-title" data-role="task-title"></h3>
+          <span class="pn-task-status" data-role="task-status"></span>
+          <span class="pn-task-comments" data-role="task-comments"></span>
+        </div>
+        <input
+          class="pn-task-description"
+          data-role="task-description"
+          maxlength="120"
+          placeholder="Описание появится из первого комментария"
+          aria-label="Описание задачи"
+          title="Описание задачи можно изменить"
+        >
       </div>
     </section>
     <div class="pn-tasklist" data-role="tasklist" hidden></div>
-    <div class="pn-filters" role="tablist" aria-label="Фильтр комментариев">
-      <button type="button" class="pn-chip is-active" data-action="filter" data-filter="all">Все</button>
-      <button type="button" class="pn-chip" data-action="filter" data-filter="open">Открытые</button>
-      <button type="button" class="pn-chip" data-action="filter" data-filter="resolved">Решённые</button>
-    </div>
     <div class="pn-list" data-role="list"></div>
-    <footer class="pn-panel-foot">
+    <footer class="pn-panel-foot" data-role="actionbar">
       <div class="pn-server" data-role="server"></div>
-      <div class="pn-foot-actions">
-        <button type="button" class="pn-btn pn-btn-primary" data-action="copy-all">Скопировать для агента</button>
-        <button type="button" class="pn-btn pn-btn-ghost" data-action="refresh">Обновить</button>
+      <div class="pn-actionbar">
+        <button type="button" class="pn-btn pn-btn-primary pn-focus-btn" data-action="focus-task" data-role="focus-button"></button>
+        <div class="pn-more-wrap">
+          <button type="button" class="pn-icon-btn pn-more-btn" data-action="task-menu" data-role="task-menu-button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с задачей" title="Действия с задачей">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="5" r="1.7" fill="currentColor"/>
+              <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+              <circle cx="12" cy="19" r="1.7" fill="currentColor"/>
+            </svg>
+          </button>
+          <div class="pn-task-menu" data-role="task-menu" role="menu" hidden>
+            <button type="button" class="pn-menu-item" data-action="close-task" role="menuitem">Закрыть задачу</button>
+            <button type="button" class="pn-menu-item pn-menu-danger" data-action="delete-task" role="menuitem">Удалить задачу</button>
+          </div>
+        </div>
       </div>
     </footer>
   </aside>
@@ -147,11 +173,12 @@ class ReviewClient {
       activeTaskId: null,
       nextTaskNumber: 1,
       taskView: 'current',
-      tasksOpen: false,
+      taskMenuOpen: false,
       mode: false,
       panel: false,
       filter: 'all',
       activeId: null,
+      editingId: null,
       server: false,
       config: {},
       compose: null,
@@ -193,13 +220,18 @@ class ReviewClient {
       panel: find('panel'),
       list: find('list'),
       count: find('count'),
-      panelCount: find('panel-count'),
+      tabs: [...this.shadow.querySelectorAll('[data-action="task-tab"]')],
       taskbar: find('taskbar'),
-      taskChip: find('task-chip'),
+      taskFilters: find('task-filters'),
+      taskTitle: find('task-title'),
       taskStatus: find('task-status'),
-      taskProgress: find('task-progress'),
+      taskComments: find('task-comments'),
       taskDescription: find('task-description'),
       taskList: find('tasklist'),
+      actionbar: find('actionbar'),
+      focusButton: find('focus-button'),
+      taskMenu: find('task-menu'),
+      taskMenuButton: find('task-menu-button'),
       server: find('server'),
       popover: find('popover'),
       targetTag: find('target-tag'),
@@ -216,22 +248,34 @@ class ReviewClient {
       annotatorCanvas: find('annotator-canvas'),
       annotatorColors: find('annotator-colors'),
     };
-    this.refs.modeButton.innerHTML = '<span class="pn-dot"></span><span data-role="mode-label">Комментировать</span>';
-    this.refs.modeLabel = this.shadow.querySelector('[data-role="mode-label"]');
   }
 
   bindUi() {
     this.app.addEventListener('click', (event) => {
       const target = event.target.closest?.('[data-action]');
-      if (!target || !this.app.contains(target)) return;
+      if (!target || !this.app.contains(target)) {
+        if (this.state.taskMenuOpen) {
+          this.state.taskMenuOpen = false;
+          this.renderPanel();
+        }
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       this.handleAction(target.dataset.action, target.dataset.id, target.dataset.filter, target.dataset.color);
     });
 
     this.app.addEventListener('input', (event) => {
-      if (event.target !== this.refs.input) return;
-      this.refs.saveButton.disabled = !event.target.value.trim();
+      const target = event.target;
+      if (target === this.refs.input) {
+        this.refs.saveButton.disabled = !target.value.trim();
+        return;
+      }
+      if (target instanceof Element && target.closest('.pn-comment-editor')) {
+        const editor = target.closest('.pn-comment-editor');
+        const save = editor.querySelector('[data-action="save-edit"]');
+        if (save) save.disabled = !target.value.trim();
+      }
     });
 
     this.app.addEventListener('change', (event) => {
@@ -240,23 +284,38 @@ class ReviewClient {
     });
 
     this.app.addEventListener('keydown', (event) => {
-      if (event.target === this.refs.taskDescription) {
-        if (event.key === 'Enter') {
+      const target = event.target;
+      const editor = target instanceof Element ? target.closest('.pn-comment-editor') : null;
+      if (editor) {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
           event.preventDefault();
-          event.target.blur();
+          this.cancelEditComment();
+          return;
+        }
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          this.saveEditedComment(editor.dataset.id);
         }
         return;
       }
-      if (event.target !== this.refs.input) return;
+      if (target === this.refs.taskDescription) {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          target.blur();
+        }
+        return;
+      }
+      if (target !== this.refs.input) return;
+      event.stopPropagation();
       if (event.key === 'Escape') {
         event.preventDefault();
-        event.stopPropagation();
         this.closeCompose();
         return;
       }
       if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
-        event.stopPropagation();
         this.saveDraft();
       }
     });
@@ -433,6 +492,14 @@ class ReviewClient {
   }
 
   onPageClick(event) {
+    if (this.state.taskMenuOpen && !this.isUiEvent(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      this.state.taskMenuOpen = false;
+      this.renderPanel();
+      return;
+    }
     if (!this.state.mode || event.button !== 0 || this.isUiEvent(event)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -466,6 +533,18 @@ class ReviewClient {
 
   onPageKeydown(event) {
     if (event.key !== 'Escape') return;
+    if (this.state.editingId) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancelEditComment();
+      return;
+    }
+    if (this.state.taskMenuOpen) {
+      event.preventDefault();
+      this.state.taskMenuOpen = false;
+      this.renderPanel();
+      return;
+    }
     if (this.state.annotator) {
       event.preventDefault();
       this.closeAnnotator();
@@ -680,7 +759,9 @@ class ReviewClient {
   setMode(active) {
     this.state.mode = Boolean(active);
     this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
-    this.refs.modeLabel.textContent = this.state.mode ? 'Готово' : 'Комментировать';
+    const modeLabel = this.state.mode ? 'Остановить комментирование' : 'Комментировать';
+    this.refs.modeButton.setAttribute('aria-label', modeLabel);
+    this.refs.modeButton.title = modeLabel;
     this.app.classList.toggle('is-commenting', this.state.mode);
     if (!this.state.mode) {
       this.state.hovered = null;
@@ -698,10 +779,19 @@ class ReviewClient {
 
   setPanel(open) {
     this.state.panel = Boolean(open);
+    if (!this.state.panel) {
+      this.state.taskMenuOpen = false;
+      this.state.editingId = null;
+    }
     this.refs.panel.hidden = !this.state.panel;
+    this.refs.panel.setAttribute('aria-hidden', String(!this.state.panel));
     this.host.dataset.panel = this.state.panel ? 'open' : 'closed';
     this.app.classList.toggle('has-panel', this.state.panel);
+    this.refs.panelButton.setAttribute('aria-expanded', String(this.state.panel));
+    this.refs.panelButton.title = this.state.panel ? 'Свернуть панель' : 'Открыть панель';
+    if (this.state.panel && this.state.mode) this.setMode(false);
     if (this.state.panel) this.renderPanel();
+    this.updateCounts();
   }
 
   openPanel() {
@@ -1217,7 +1307,6 @@ class ReviewClient {
       this.renderAll();
     } else {
       this.state.taskView = 'current';
-      this.state.tasksOpen = false;
       this.closeCompose({ reload: false });
       const refreshed = await this.refreshFromServer();
       if (!refreshed && saved) {
@@ -1238,7 +1327,7 @@ class ReviewClient {
         : 'Комментарий добавлен',
       usedLocalFallback ? 'error' : ''
     );
-    this.maybeReload();
+    this.setMode(false);
   }
 
   ensureLocalActiveTask(description) {
@@ -1598,7 +1687,7 @@ class ReviewClient {
       pin.className = `pn-pin status-${comment.status || 'open'}${comment.id === this.state.activeId ? ' is-active' : ''}`;
       pin.textContent = String(number || 1);
       const pinTask = this.taskForComment(comment);
-      pin.title = [pinTask ? taskTag(pinTask) : '', comment.comment || comment.id]
+      pin.title = [pinTask ? this.taskDisplayTag(pinTask) : '', comment.comment || comment.id]
         .filter(Boolean)
         .join(' · ');
       pin.setAttribute('aria-label', `Комментарий ${number || 1}`);
@@ -1629,15 +1718,11 @@ class ReviewClient {
       : this.state.comments;
     const openCount = taskComments.filter((comment) => isOpenStatus(comment.status)).length;
     this.refs.count.textContent = String(openCount);
-    this.refs.count.title = `${openCount} открытых`;
-    const selected = this.selectedTask();
-    const selectedComments = selected
-      ? this.state.comments.filter((comment) => comment.taskId === selected.id)
-      : this.state.comments;
-    this.refs.panelCount.textContent = selectedComments.length ? `(${selectedComments.length})` : '';
+    this.refs.count.title = `${openCount} нерешённых`;
+    this.refs.count.classList.toggle('is-empty', openCount === 0);
     this.refs.panelButton.setAttribute(
       'aria-label',
-      `Открыть комментарии, ${openCount} открытых`
+      `${this.state.panel ? 'Свернуть' : 'Открыть'} панель комментариев, ${openCount} нерешённых`
     );
   }
 
@@ -1646,7 +1731,7 @@ class ReviewClient {
     const project = this.state.config.project || 'website';
     const task = this.selectedTask();
     const taskText = task
-      ? ` · ${taskTag(task)} ${taskStatusLabel(task.status).toLowerCase()}`
+      ? ` · ${this.taskDisplayTag(task)} ${taskStatusLabel(task.status).toLowerCase()}`
       : '';
     this.refs.server.classList.toggle('is-local', local);
     if (local) {
@@ -1678,17 +1763,23 @@ class ReviewClient {
   }
 
   renderPanel() {
-    const list = this.filteredComments();
+    const showingAll = this.state.taskView === 'all';
+    const list = showingAll ? [] : this.filteredComments();
     this.refs.list.replaceChildren();
     this.host.dataset.filter = this.state.filter;
     this.refs.panel.dataset.filter = this.state.filter;
     this.updateCounts();
     this.updateServerNote();
+    this.renderTabs();
     this.renderTaskbar();
     this.renderTaskList();
+    this.renderActionbar();
     for (const filter of this.refs.filters) {
       filter.classList.toggle('is-active', filter.dataset.filter === this.state.filter);
     }
+    this.refs.list.hidden = showingAll;
+
+    if (showingAll) return;
 
     if (list.length === 0) {
       const empty = document.createElement('div');
@@ -1704,7 +1795,7 @@ class ReviewClient {
       const hint = document.createElement('span');
       hint.textContent = taskComments.length
         ? 'Смени фильтр или добавь новый комментарий.'
-        : 'Нажми «Комментировать», затем кликни по элементу на странице.';
+        : 'Нажми иконку комментария, затем кликни по элементу на странице.';
       empty.append(title, hint);
       this.refs.list.append(empty);
       return;
@@ -1719,55 +1810,83 @@ class ReviewClient {
     active?.scrollIntoView({ block: 'nearest' });
   }
 
+  renderTabs() {
+    const showingAll = this.state.taskView === 'all';
+    for (const tab of this.refs.tabs) {
+      const active = tab.dataset.id === (showingAll ? 'all' : 'current');
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', String(active));
+    }
+  }
+
   renderTaskbar() {
     const task = this.selectedTask();
-    const active = this.currentTask();
-    const taskViewAll = this.state.taskView === 'all';
-    this.refs.taskbar.hidden = false;
-    this.refs.taskDescription.disabled = !task;
+    const showingAll = this.state.taskView === 'all';
+    this.refs.taskbar.hidden = showingAll;
+    this.refs.taskFilters.hidden = showingAll;
+    if (showingAll) return;
+
+    this.refs.taskDescription.disabled = !task || task.status === 'closed';
     this.refs.taskDescription.dataset.taskId = task?.id || '';
     this.refs.taskDescription.value = task?.description || '';
-    this.refs.taskChip.textContent = task
-      ? `${taskTag(task)} · ${formatTaskDate(task.createdAt)}`
-      : taskViewAll
-        ? 'Все задачи'
-        : 'Новая задача';
-    this.refs.taskChip.title = task ? taskTitle(task) : 'Открыть список задач';
+    this.refs.taskTitle.textContent = task ? this.taskDisplayTag(task) : 'Новая задача';
     this.refs.taskStatus.textContent = task ? taskStatusLabel(task.status) : '';
     this.refs.taskStatus.className = `pn-task-status${task ? ` status-${task.status}` : ''}`;
     if (task) {
       const { total, counts } = this.taskCounts(task.id);
-      const done = counts.resolved + counts.wontfix;
-      this.refs.taskProgress.textContent = `${done}/${total}`;
-      this.refs.taskProgress.title = `Открыто: ${counts.open}, не найдено: ${counts.orphaned}`;
+      this.refs.taskComments.textContent = `${total} комм.`;
+      this.refs.taskComments.title = `Всего комментариев: ${total} · открыто: ${counts.open + counts.orphaned}`;
     } else {
-      this.refs.taskProgress.textContent = '';
-      this.refs.taskProgress.title = '';
+      this.refs.taskComments.textContent = '';
+      this.refs.taskComments.title = '';
     }
-    this.refs.taskbar.querySelector('[data-action="show-current-task"]').hidden =
-      taskViewAll || !active || task?.id === active.id;
-    this.refs.taskbar.querySelector('[data-action="close-task"]').hidden =
-      !task || task.status === 'closed';
-    this.refs.taskbar.querySelector('[data-action="delete-task"]').hidden = !task;
+  }
+
+  renderActionbar() {
+    const task = this.selectedTask();
+    const visible = this.state.taskView !== 'all' && Boolean(task);
+    this.refs.actionbar.hidden = !visible;
+    const menuOpen = Boolean(visible && this.state.taskMenuOpen);
+    this.refs.taskMenu.hidden = !menuOpen;
+    this.refs.taskMenuButton.setAttribute('aria-expanded', String(menuOpen));
+    if (!visible) return;
+
+    const { total, counts } = this.taskCounts(task.id);
+    const unresolved = counts.open + counts.orphaned;
+    const button = this.refs.focusButton;
+    button.disabled = false;
+    button.dataset.focus = '';
+
+    if (task.status === 'closed') {
+      button.textContent = 'Задача закрыта';
+      button.disabled = true;
+    } else if (total === 0) {
+      button.textContent = 'Нет комментариев';
+      button.disabled = true;
+    } else if (unresolved > 0) {
+      button.textContent = 'Скопировать задание для агента';
+      button.dataset.focus = 'copy';
+    } else {
+      button.textContent = 'Завершить задачу';
+      button.dataset.focus = 'close';
+    }
+
+    const closeButton = this.refs.taskMenu.querySelector('[data-action="close-task"]');
+    closeButton.disabled = task.status === 'closed' || unresolved > 0;
+    closeButton.title = closeButton.disabled
+      ? unresolved > 0
+        ? 'Сначала разберите открытые комментарии'
+        : 'Задача уже закрыта'
+      : 'Закрыть задачу';
   }
 
   renderTaskList() {
     const panel = this.refs.taskList;
-    panel.hidden = !this.state.tasksOpen;
-    if (!this.state.tasksOpen) return;
+    const showingAll = this.state.taskView === 'all';
+    panel.hidden = !showingAll;
+    panel.classList.toggle('is-all', showingAll);
+    if (!showingAll) return;
     panel.replaceChildren();
-    const head = document.createElement('div');
-    head.className = 'pn-tasklist-head';
-    const title = document.createElement('strong');
-    title.textContent = 'Задачи';
-    const all = document.createElement('button');
-    all.type = 'button';
-    all.className = 'pn-action';
-    all.dataset.action = 'select-task';
-    all.dataset.id = 'all';
-    all.textContent = 'Все комментарии';
-    head.append(title, all);
-    panel.append(head);
 
     if (this.state.tasks.length === 0) {
       const empty = document.createElement('div');
@@ -1786,15 +1905,11 @@ class ReviewClient {
       row.className = 'pn-task-row';
       row.dataset.action = 'select-task';
       row.dataset.id = task.id;
-      const selected =
-        this.state.taskView === task.id ||
-        (this.state.taskView === 'current' && this.selectedTask()?.id === task.id);
-      row.classList.toggle('is-selected', selected);
       row.classList.toggle('is-active-task', task.status === 'active');
 
       const tag = document.createElement('span');
       tag.className = 'pn-task-row-tag';
-      tag.textContent = taskTag(task);
+      tag.textContent = this.taskDisplayTag(task);
       const main = document.createElement('span');
       main.className = 'pn-task-row-main';
       const description = document.createElement('span');
@@ -1837,13 +1952,15 @@ class ReviewClient {
     if (task) {
       const taskChip = document.createElement('span');
       taskChip.className = 'pn-task-chip pn-task-chip-small';
-      taskChip.textContent = taskTag(task);
+      taskChip.textContent = this.taskDisplayTag(task);
       taskChip.title = taskTitle(task);
       head.append(dot, idLabel, taskChip, badge, time);
     } else {
       head.append(dot, idLabel, badge, time);
     }
 
+    const canEdit = this.canEditComment(comment, task);
+    const editing = comment.id === this.state.editingId && canEdit;
     const body = document.createElement('p');
     body.className = 'pn-comment-text';
     body.textContent = comment.comment || '';
@@ -1854,6 +1971,35 @@ class ReviewClient {
     if (resolution) {
       resolution.className = 'pn-resolution';
       resolution.textContent = `Решение: ${comment.resolution}`;
+    }
+
+    let editor = null;
+    if (editing) {
+      editor = document.createElement('div');
+      editor.className = 'pn-comment-editor';
+      editor.dataset.id = comment.id;
+      editor.addEventListener('click', (event) => {
+        const action = event.target.closest?.('[data-action]');
+        if (!action || !editor.contains(action)) event.stopPropagation();
+      });
+
+      const textarea = document.createElement('textarea');
+      textarea.rows = 4;
+      textarea.value = comment.comment || '';
+      textarea.dataset.role = 'edit-input';
+      textarea.dataset.id = comment.id;
+      textarea.setAttribute('aria-label', 'Редактировать комментарий');
+
+      const editorActions = document.createElement('div');
+      editorActions.className = 'pn-comment-editor-actions';
+      const save = this.actionButton('Сохранить', 'save-edit', comment.id, 'pn-action-primary');
+      save.disabled = !textarea.value.trim();
+      const cancel = this.actionButton('Отмена', 'cancel-edit', comment.id);
+      const hint = document.createElement('span');
+      hint.className = 'pn-comment-editor-hint';
+      hint.textContent = '⌘↵ — сохранить · Esc — отмена';
+      editorActions.append(save, cancel, hint);
+      editor.append(textarea, editorActions);
     }
 
     const meta = document.createElement('div');
@@ -1890,7 +2036,7 @@ class ReviewClient {
       const reopened = document.createElement('div');
       const fromTask = this.findTask(comment.reopenedFrom.taskId);
       reopened.textContent = fromTask
-        ? `Возвращён из ${taskTag(fromTask)}`
+        ? `Возвращён из ${this.taskDisplayTag(fromTask)}`
         : 'Возвращён из удалённой задачи';
       meta.append(reopened);
     }
@@ -1903,32 +2049,43 @@ class ReviewClient {
 
     const actions = document.createElement('div');
     actions.className = 'pn-comment-actions';
-    if (element) {
-      actions.append(this.actionButton('Показать', 'focus', comment.id));
-    }
-    if (task?.status === 'active') {
-      actions.append(
-        this.actionButton(
-          isOpenStatus(comment.status) ? 'Решить' : 'Вернуть',
-          'toggle-status',
-          comment.id
-        )
-      );
-      if (isOpenStatus(comment.status)) {
-        actions.append(this.actionButton('Не правим', 'wontfix', comment.id));
+    if (!editing) {
+      if (element) {
+        actions.append(this.actionButton('Показать', 'focus', comment.id));
       }
-    } else {
-      actions.append(this.actionButton('Вернуть в текущую', 'reopen', comment.id));
+      if (canEdit) {
+        actions.append(this.actionButton('Изменить', 'edit', comment.id));
+      }
+      if (task?.status === 'active') {
+        actions.append(
+          this.actionButton(
+            isOpenStatus(comment.status) ? 'Решить' : 'Вернуть',
+            'toggle-status',
+            comment.id
+          )
+        );
+        if (isOpenStatus(comment.status)) {
+          actions.append(this.actionButton('Не правим', 'wontfix', comment.id));
+        }
+      } else {
+        actions.append(this.actionButton('Вернуть в текущую', 'reopen', comment.id));
+      }
+      actions.append(
+        this.actionButton('Копировать', 'copy-one', comment.id),
+        this.actionButton('Удалить', 'delete', comment.id, 'pn-action-danger')
+      );
     }
-    actions.append(
-      this.actionButton('Копировать', 'copy-one', comment.id),
-      this.actionButton('Удалить', 'delete', comment.id, 'pn-action-danger')
-    );
 
-    card.append(head, body);
-    if (resolution) card.append(resolution);
+    card.append(head);
+    if (editor) {
+      card.append(editor);
+    } else {
+      card.append(body);
+      if (resolution) card.append(resolution);
+    }
     if (comment.screenshot?.file) card.append(this.renderCommentScreenshot(comment.screenshot));
-    card.append(meta, actions);
+    card.append(meta);
+    if (!editing) card.append(actions);
     return card;
   }
 
@@ -1994,6 +2151,7 @@ class ReviewClient {
   }
 
   async handleAction(action, id, filter, color) {
+    if (action !== 'task-menu') this.state.taskMenuOpen = false;
     switch (action) {
       case 'mode':
         this.setMode(!this.state.mode);
@@ -2048,8 +2206,32 @@ class ReviewClient {
       case 'copy-all':
         await this.copyAll();
         break;
+      case 'focus-task':
+        await this.runFocusAction();
+        break;
+      case 'task-menu':
+        this.state.taskMenuOpen = !this.state.taskMenuOpen;
+        this.renderActionbar();
+        break;
+      case 'task-tab':
+        this.state.taskView = id === 'all' ? 'all' : 'current';
+        this.state.taskMenuOpen = false;
+        this.state.activeId = null;
+        this.state.editingId = null;
+        this.renderPanel();
+        this.schedulePins();
+        break;
       case 'focus':
         this.focusComment(id);
+        break;
+      case 'edit':
+        this.startEditComment(id);
+        break;
+      case 'save-edit':
+        await this.saveEditedComment(id);
+        break;
+      case 'cancel-edit':
+        this.cancelEditComment();
         break;
       case 'toggle-status':
         await this.toggleStatus(id);
@@ -2060,19 +2242,11 @@ class ReviewClient {
       case 'reopen':
         await this.reopenComment(id);
         break;
-      case 'toggle-tasks':
-        this.state.tasksOpen = !this.state.tasksOpen;
-        this.renderPanel();
-        break;
       case 'select-task':
         this.state.taskView = id || 'current';
-        this.state.tasksOpen = true;
+        this.state.taskMenuOpen = false;
         this.state.activeId = null;
-        this.renderPanel();
-        this.schedulePins();
-        break;
-      case 'show-current-task':
-        this.state.taskView = 'current';
+        this.state.editingId = null;
         this.renderPanel();
         this.schedulePins();
         break;
@@ -2142,6 +2316,11 @@ class ReviewClient {
     return this.findTask(comment.taskId) || null;
   }
 
+  taskDisplayTag(task) {
+    const number = Number(task?.number);
+    return Number.isFinite(number) && number > 0 ? `TASK-${number}` : 'TASK';
+  }
+
   taskCounts(taskId) {
     const items = this.state.comments.filter((comment) => comment.taskId === taskId);
     const counts = { open: 0, resolved: 0, wontfix: 0, orphaned: 0 };
@@ -2152,9 +2331,70 @@ class ReviewClient {
     return { total: items.length, counts };
   }
 
+  canEditComment(comment, task = this.taskForComment(comment)) {
+    return Boolean(comment && task && task.status !== 'closed' && isOpenStatus(comment.status));
+  }
+
+  editTextarea(id) {
+    return [...this.refs.list.querySelectorAll('[data-role="edit-input"]')].find(
+      (item) => item.dataset.id === id
+    ) || null;
+  }
+
+  startEditComment(id) {
+    const comment = this.findComment(id);
+    if (!comment || !this.canEditComment(comment)) {
+      this.toast('Редактировать можно только открытый комментарий в незакрытой задаче', 'error');
+      return;
+    }
+    this.state.editingId = id;
+    this.state.activeId = id;
+    this.renderPanel();
+    requestAnimationFrame(() => {
+      const textarea = this.editTextarea(id);
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+  }
+
+  cancelEditComment() {
+    if (!this.state.editingId) return;
+    this.state.editingId = null;
+    this.renderPanel();
+  }
+
+  async saveEditedComment(id) {
+    const comment = this.findComment(id);
+    if (!comment) return;
+    if (!this.canEditComment(comment)) {
+      this.state.editingId = null;
+      this.renderPanel();
+      this.toast('Задача уже закрыта или комментарий решён', 'error');
+      return;
+    }
+    const textarea = this.editTextarea(id);
+    const value = String(textarea?.value || '').trim();
+    if (!value) {
+      this.toast('Комментарий не может быть пустым', 'error');
+      textarea?.focus();
+      return;
+    }
+    if (value === comment.comment) {
+      this.cancelEditComment();
+      return;
+    }
+    const saved = await this.updateComment(id, { comment: value }, { toast: false, render: false });
+    if (!saved) return;
+    this.state.editingId = null;
+    this.renderAll();
+    this.toast('Комментарий сохранён');
+  }
+
   focusComment(id) {
     const comment = this.findComment(id);
     if (!comment) return;
+    if (this.state.editingId && this.state.editingId !== id) this.state.editingId = null;
     if (this.state.compose) {
       this.closeCompose({ reload: false });
       this.maybeReload();
@@ -2209,7 +2449,6 @@ class ReviewClient {
           body: JSON.stringify({}),
         });
         this.state.taskView = 'current';
-        this.state.tasksOpen = false;
         await this.refreshFromServer();
         this.toast('Комментарий возвращён в текущую задачу');
       } catch (err) {
@@ -2244,6 +2483,18 @@ class ReviewClient {
     this.toast('Комментарий возвращён в текущую задачу');
   }
 
+  async runFocusAction() {
+    const task = this.selectedTask();
+    if (!task) return;
+    const { counts } = this.taskCounts(task.id);
+    const unresolved = counts.open + counts.orphaned;
+    if (unresolved > 0) {
+      await this.copyAll();
+      return;
+    }
+    await this.closeTask();
+  }
+
   async closeTask() {
     const task = this.selectedTask();
     if (!task || task.status === 'closed') return;
@@ -2255,7 +2506,7 @@ class ReviewClient {
       );
       return;
     }
-    if (!window.confirm(`Закрыть ${taskTag(task)}? Новые комментарии попадут в новую задачу.`)) {
+    if (!window.confirm(`Закрыть ${this.taskDisplayTag(task)}? Новые комментарии попадут в новую задачу.`)) {
       return;
     }
     if (this.state.server) {
@@ -2265,7 +2516,7 @@ class ReviewClient {
           body: JSON.stringify({}),
         });
         await this.refreshFromServer();
-        this.toast(`${taskTag(task)} закрыта`);
+        this.toast(`${this.taskDisplayTag(task)} закрыта`);
       } catch (err) {
         this.toast(err.message || 'Не удалось закрыть задачу', 'error');
       }
@@ -2279,7 +2530,7 @@ class ReviewClient {
     this.state.taskView = 'current';
     this.saveLocal();
     this.renderAll();
-    this.toast(`${taskTag(task)} закрыта`);
+    this.toast(`${this.taskDisplayTag(task)} закрыта`);
   }
 
   async deleteTask() {
@@ -2288,7 +2539,7 @@ class ReviewClient {
     const { total } = this.taskCounts(task.id);
     if (
       !window.confirm(
-        `Удалить переписку ${taskTag(task)} и все её комментарии (${total})? Это необратимо.`
+        `Удалить переписку ${this.taskDisplayTag(task)} и все её комментарии (${total})? Это необратимо.`
       )
     ) {
       return;
@@ -2299,7 +2550,7 @@ class ReviewClient {
         this.state.taskView = 'current';
         this.state.activeId = null;
         await this.refreshFromServer();
-        this.toast(`${taskTag(task)} удалена`);
+        this.toast(`${this.taskDisplayTag(task)} удалена`);
       } catch (err) {
         this.toast(err.message || 'Не удалось удалить задачу', 'error');
       }
@@ -2312,7 +2563,7 @@ class ReviewClient {
     this.state.activeId = null;
     this.saveLocal();
     this.renderAll();
-    this.toast(`${taskTag(task)} удалена`);
+    this.toast(`${this.taskDisplayTag(task)} удалена`);
   }
 
   async updateTaskDescription(value, taskId) {
@@ -2342,7 +2593,7 @@ class ReviewClient {
     this.toast('Описание задачи сохранено');
   }
 
-  async updateComment(id, patch) {
+  async updateComment(id, patch, { toast = true, render = true } = {}) {
     if (this.state.server) {
       try {
         const data = await this.api(`/comments/${encodeURIComponent(id)}`, {
@@ -2352,12 +2603,12 @@ class ReviewClient {
         const comment = this.findComment(id);
         if (comment && data?.comment) Object.assign(comment, data.comment);
       } catch (err) {
-        this.toast(err.message || 'Не удалось обновить комментарий', 'error');
-        return;
+        if (toast) this.toast(err.message || 'Не удалось обновить комментарий', 'error');
+        return false;
       }
     } else {
       const comment = this.findComment(id);
-      if (!comment) return;
+      if (!comment) return false;
       Object.assign(comment, patch);
       comment.updatedAt = new Date().toISOString();
       if (patch.status) {
@@ -2366,8 +2617,17 @@ class ReviewClient {
       }
     }
     this.saveLocal();
-    this.renderAll();
-    this.toast(patch.status === 'resolved' ? 'Комментарий решён' : 'Статус обновлён');
+    if (render) this.renderAll();
+    if (toast) {
+      this.toast(
+        patch.status === 'resolved'
+          ? 'Комментарий решён'
+          : patch.status
+            ? 'Статус обновлён'
+            : 'Комментарий сохранён'
+      );
+    }
+    return true;
   }
 
   async deleteComment(id) {
@@ -2398,9 +2658,11 @@ class ReviewClient {
 
   async copyAll() {
     const task = this.selectedTask();
-    const comments = task
+    const taskComments = task
       ? this.state.comments.filter((comment) => comment.taskId === task.id)
       : this.state.comments;
+    const openComments = taskComments.filter((comment) => isOpenStatus(comment.status));
+    const comments = openComments.length > 0 ? openComments : taskComments;
     if (comments.length === 0) {
       this.toast('Комментариев пока нет');
       return;
@@ -2411,7 +2673,7 @@ class ReviewClient {
       task,
     });
     const copied = await this.copyText(markdown);
-    if (copied) this.toast('Markdown скопирован — вставь его в чат агенту');
+    if (copied) this.toast('Задание скопировано — вставьте его в чат агенту');
     else this.download('feedback.md', markdown);
   }
 
