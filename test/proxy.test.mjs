@@ -80,7 +80,7 @@ before(async () => {
 
   upstream = createServer((request, response) => {
     const url = new URL(request.url || '/', 'http://upstream.local');
-    if (url.pathname === '/') {
+    if (url.pathname === '/' || url.pathname === '/portfolio') {
       response.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Set-Cookie': 'session=1; Domain=localhost; Path=/',
@@ -160,6 +160,29 @@ test('proxies HTML and injects the review client', async () => {
   const cookie = response.headers.get('set-cookie') || '';
   assert.match(cookie, /session=1/);
   assert.doesNotMatch(cookie, /Domain=/i);
+});
+
+test('redirects the root to the configured base path and proxies it', async () => {
+  const reviewWithBase = await createReviewServer({
+    root,
+    target: upstreamUrl,
+    basePath: '/portfolio',
+    watch: false,
+  });
+  const url = (await reviewWithBase.listen(0, '127.0.0.1')).url;
+  try {
+    const redirect = await fetch(`${url}/?from=root`, { redirect: 'manual' });
+    assert.equal(redirect.status, 302);
+    assert.equal(redirect.headers.get('location'), '/portfolio?from=root');
+
+    const response = await fetch(`${url}/portfolio`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Dev build/);
+    assert.match(html, /data-pin-note/);
+  } finally {
+    await reviewWithBase.close();
+  }
 });
 
 test('proxies assets unchanged', async () => {

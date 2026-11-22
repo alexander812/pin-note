@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { access, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { normalizeBasePath } from '../src/base-path.mjs';
 import { detectDevServer } from '../src/dev-server.mjs';
 import { createReviewServer } from '../src/server.mjs';
 import { ReviewStore } from '../src/store.mjs';
@@ -53,6 +54,7 @@ const HELP = `PinNote 0.1.0
   -p, --port <port>   Порт review-сервера (по умолчанию 4174)
       --host <host>   Хост (по умолчанию 127.0.0.1)
       --target <url>  Явно указать адрес dev-сервера (например http://localhost:5173)
+      --base <path>   Базовый путь сайта (например /portfolio), если он не определился сам
       --no-detect     Не искать dev-сервер автоматически, работать как статический сервер
       --data-dir <dir> Каталог для comments.json, feedback.md и AGENT.md (по умолчанию <directory>/.review)
       --source-dir <dir> Где искать исходники для подсказок (по умолчанию <directory>)
@@ -71,6 +73,7 @@ function parseArgs(argv) {
     dataDir: null,
     sourceDir: null,
     target: null,
+    basePath: null,
     noDetect: false,
     spa: false,
     open: true,
@@ -134,6 +137,14 @@ function parseArgs(argv) {
       const value = argv[index + 1];
       if (!value) throw new Error('Не указан target dev-сервера');
       options.target = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--base') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указан базовый путь');
+      options.basePath = normalizeBasePath(value);
+      if (!options.basePath) throw new Error(`Некорректный базовый путь: ${value}`);
       index += 1;
       continue;
     }
@@ -585,20 +596,24 @@ async function main() {
   let detection = null;
 
   if (!options.target && !options.noDetect) {
-    detection = await detectDevServer(root);
+    detection = await detectDevServer(root, {
+      basePath: options.basePath === null ? undefined : options.basePath,
+    });
     if (detection.url) {
       options.target = detection.url;
       options.detectedTarget = true;
+      options.basePath = detection.base || null;
     } else if (detection.candidates.length > 1) {
       console.error(`[pin-note] ${detection.reason} для ${displayPath(root)}:`);
       for (const candidate of detection.candidates) {
-        console.error(`  ${candidate.url} — ${candidate.command}`);
+        console.error(`  ${candidate.siteUrl || candidate.url} — ${candidate.command}`);
       }
-      console.error('[pin-note] Укажи нужный через --target или отключи поиск через --no-detect.');
+      console.error('[pin-note] Укажи нужный через --target (без базового пути) или отключи поиск через --no-detect.');
       process.exitCode = 1;
       return;
     }
   }
+  options.basePath = options.basePath || null;
 
   if (options.target && !options.detectedTarget && !options.dataDir && (await isPinNoteCheckout(root))) {
     console.error('[pin-note] В режиме --target первым аргументом указывается корень проекта.');
@@ -625,6 +640,7 @@ async function main() {
       dataDir: options.dataDir ? resolve(options.dataDir) : undefined,
       sourceRoot: options.sourceDir ? resolve(options.sourceDir) : undefined,
       target: options.target || undefined,
+      basePath: options.basePath || undefined,
       watch: options.watch,
       spa: options.spa,
     });
@@ -651,6 +667,7 @@ async function main() {
     }
   }
 
+  const reviewUrl = options.basePath ? `${listening.url}${options.basePath}` : listening.url;
   console.log('');
   console.log('  PinNote');
   if (options.target) {
@@ -659,12 +676,12 @@ async function main() {
   } else {
     console.log(`  Сайт:      ${displayPath(root)}`);
   }
-  console.log(`  Review:    ${listening.url}`);
+  console.log(`  Review:    ${reviewUrl}`);
   console.log(`  Комментарии: ${displayPath(review.store.commentsFile)}`);
   console.log('  Остановить: Ctrl+C');
   console.log('');
 
-  if (options.open && process.stdout.isTTY) openBrowser(listening.url);
+  if (options.open && process.stdout.isTTY) openBrowser(reviewUrl);
 
   let closing = false;
   const shutdown = async (signal) => {

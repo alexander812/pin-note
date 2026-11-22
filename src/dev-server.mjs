@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { realpath } from 'node:fs/promises';
-import { sep } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { join, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { normalizeBasePath } from './base-path.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -9,12 +10,108 @@ const DEV_COMMAND = /(vite|astro|next|nuxt|remix|svelte|webpack|parcel|angular|r
 const FRAMEWORK_COMMAND = /(vite|astro|next|nuxt|remix|svelte|webpack|parcel|angular|react-scripts|vue-cli-service|http-server|live-server)/i;
 const PIN_NOTE_COMMAND = /(?:^|[\s/])pin-note(?:\.mjs)?(?:\s|$)/i;
 
+const BASE_CONFIGS = [
+  {
+    files: ['astro.config.mjs', 'astro.config.mts', 'astro.config.js', 'astro.config.cjs', 'astro.config.ts'],
+    keys: ['base'],
+  },
+  {
+    files: ['vite.config.mjs', 'vite.config.mts', 'vite.config.js', 'vite.config.cjs', 'vite.config.ts'],
+    keys: ['base'],
+  },
+  {
+    files: ['next.config.mjs', 'next.config.js', 'next.config.cjs', 'next.config.ts'],
+    keys: ['basePath'],
+  },
+  {
+    files: ['nuxt.config.mjs', 'nuxt.config.js', 'nuxt.config.ts'],
+    keys: ['baseURL', 'base'],
+  },
+  {
+    files: ['svelte.config.js', 'svelte.config.ts'],
+    keys: ['base'],
+  },
+];
+
+function configString(text, key) {
+  const pattern = new RegExp(
+    `(?:^|[^\\w$])${key}\\s*:\\s*(['"\`])([^'"\`\\n]*)\\1`,
+    'm'
+  );
+  const match = pattern.exec(text);
+  return match ? match[2] : null;
+}
+
+export async function detectBasePath(root) {
+  for (const config of BASE_CONFIGS) {
+    for (const file of config.files) {
+      let text;
+      try {
+        text = await readFile(join(root, file), 'utf8');
+      } catch {
+        continue;
+      }
+      for (const key of config.keys) {
+        const value = configString(text, key);
+        if (value !== null) return normalizeBasePath(value);
+      }
+    }
+  }
+  return '';
+}
+
 function scoreCandidate(command) {
   let score = 0;
   if (FRAMEWORK_COMMAND.test(command)) score += 6;
   if (/\bdev\b/i.test(command)) score += 3;
   if (/\bpreview\b/i.test(command)) score -= 10;
   return score;
+}
+
+export function parseElapsed(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const [dayPart, clockPart] = text.includes('-') ? text.split('-', 2) : [null, text];
+  const clock = clockPart.split(':');
+  if (clock.length < 2 || clock.length > 3) return null;
+  const parts = clock.map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return null;
+  let seconds = 0;
+  for (const part of parts) seconds = seconds * 60 + part;
+  if (dayPart !== null) {
+    const days = Number(dayPart);
+    if (!Number.isFinite(days)) return null;
+    seconds += days * 86400;
+  }
+  return seconds;
+}
+
+function commandSignature(command) {
+  return String(command || '')
+    .replace(/(?:^|\s)(?:--port|-p)(?:=|\s+)\d+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function dedupeDuplicateServers(candidates) {
+  const groups = new Map();
+  for (const candidate of candidates) {
+    const key = `${candidate.cwd}|${commandSignature(candidate.command)}`;
+    const group = groups.get(key) || [];
+    group.push(candidate);
+    groups.set(key, group);
+  }
+
+  const unique = [];
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      unique.push(group[0]);
+      continue;
+    }
+    group.sort((a, b) => (a.elapsed ?? Infinity) - (b.elapsed ?? Infinity));
+    unique.push(group[0]);
+  }
+  return unique;
 }
 
 export function parseAddress(value) {
@@ -78,12 +175,17 @@ async function processDetails(pids) {
   try {
     const { stdout } = await execFileAsync(
       'ps',
-      ['-p', pids.join(','), '-o', 'pid=,command='],
+      ['-p', pids.join(','), '-o', 'pid=,etime=,command='],
       { timeout: 3000, maxBuffer: 1024 * 1024 }
     );
     for (const line of stdout.split('\n')) {
-      const match = /^\s*(\d+)\s+(.+)$/.exec(line);
-      if (match) details.set(Number(match[1]), { command: match[2].trim() });
+      const match = /^\s*(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+      if (match) {
+        details.set(Number(match[1]), {
+          command: match[3].trim(),
+          elapsed: parseElapsed(match[2]),
+        });
+      }
     }
   } catch {
     // Fall back to lsof's short command names.
@@ -137,10 +239,24 @@ async function probe(url, timeout = 2500) {
   }
 }
 
+async function probeSite(origin, basePath, timeout) {
+  const paths = basePath ? [basePath, '/'] : ['/'];
+  for (const path of paths) {
+    if (await probe(`${origin}${path}`, timeout)) {
+      return {
+        base: path === '/' ? '' : basePath,
+        siteUrl: `${origin}${path}`,
+      };
+    }
+  }
+  return null;
+}
+
 export async function detectDevServer(root, options = {}) {
   if (process.platform !== 'darwin' && process.platform !== 'linux') {
     return {
       url: null,
+      base: '',
       candidates: [],
       reason: 'автоопределение dev-сервера поддерживается только на macOS и Linux',
     };
@@ -157,6 +273,7 @@ export async function detectDevServer(root, options = {}) {
   } catch (err) {
     return {
       url: null,
+      base: '',
       candidates: [],
       reason: `не удалось получить список портов: ${err.message}`,
     };
@@ -164,6 +281,10 @@ export async function detectDevServer(root, options = {}) {
 
   const details = await processDetails(listeners.map((entry) => entry.pid));
   const rootPath = await realpath(root).catch(() => root);
+  const basePath =
+    options.basePath !== undefined
+      ? normalizeBasePath(options.basePath)
+      : await detectBasePath(rootPath);
   const candidatesByUrl = new Map();
 
   for (const entry of listeners) {
@@ -184,6 +305,7 @@ export async function detectDevServer(root, options = {}) {
           port: socket.port,
           command,
           cwd,
+          elapsed: detail.elapsed ?? null,
         });
       }
     }
@@ -191,12 +313,15 @@ export async function detectDevServer(root, options = {}) {
 
   const all = [...candidatesByUrl.values()];
   const checks = await Promise.all(
-    all.map(async (candidate) => ({ ...candidate, html: await probe(candidate.url, options.probeTimeout) }))
+    all.map(async (candidate) => {
+      const found = await probeSite(candidate.url, basePath, options.probeTimeout);
+      return found ? { ...candidate, ...found } : null;
+    })
   );
   const html = [];
   const seen = new Set();
   for (const candidate of checks) {
-    if (!candidate.html) continue;
+    if (!candidate) continue;
     const key = `${candidate.pid}:${candidate.port}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -206,26 +331,29 @@ export async function detectDevServer(root, options = {}) {
   if (html.length === 0) {
     return {
       url: null,
+      base: basePath,
       candidates: [],
       reason: `в ${rootPath} не найден запущенный dev-сервер`,
     };
   }
 
-  if (html.length === 1) {
-    return { url: html[0].url, candidates: html, reason: '' };
+  const unique = dedupeDuplicateServers(html);
+  if (unique.length === 1) {
+    return { url: unique[0].url, base: unique[0].base, candidates: unique, reason: '' };
   }
 
-  const ranked = [...html].sort(
+  const ranked = [...unique].sort(
     (a, b) => scoreCandidate(b.command) - scoreCandidate(a.command)
   );
   const bestScore = scoreCandidate(ranked[0].command);
   const best = ranked.filter((candidate) => scoreCandidate(candidate.command) === bestScore);
   if (best.length === 1) {
-    return { url: best[0].url, candidates: ranked, reason: '' };
+    return { url: best[0].url, base: best[0].base, candidates: ranked, reason: '' };
   }
 
   return {
     url: null,
+    base: basePath,
     candidates: ranked,
     reason: 'найдено несколько dev-серверов',
   };

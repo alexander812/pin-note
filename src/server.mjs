@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeBasePath } from './base-path.mjs';
 import { createProxy } from './proxy.mjs';
 import { ReviewStore } from './store.mjs';
 
@@ -240,6 +241,7 @@ export async function createReviewServer(options = {}) {
   const watchFiles = options.watch !== false;
   const watchRoot = watchFiles && !options.target;
   const spa = Boolean(options.spa);
+  const basePath = normalizeBasePath(options.basePath);
   const proxy = options.target ? createProxy({ target: options.target, injectClient }) : null;
   const store = new ReviewStore({ root, dataDir, sourceRoot });
   await store.init();
@@ -704,6 +706,19 @@ export async function createReviewServer(options = {}) {
         await handleReview(request, response, parsed.pathname, parsed.searchParams);
         return;
       }
+      if (
+        proxy &&
+        basePath &&
+        parsed.pathname === '/' &&
+        (request.method === 'GET' || request.method === 'HEAD')
+      ) {
+        response.writeHead(302, {
+          Location: `${basePath}${parsed.search}`,
+          'Cache-Control': 'no-store',
+        });
+        response.end();
+        return;
+      }
       if (proxy) {
         proxy.handleHttp(request, response);
         return;
@@ -814,6 +829,7 @@ export async function createReviewServer(options = {}) {
     listen,
     close,
     broadcast,
+    basePath,
     target: proxy?.target?.href || null,
     get url() {
       return url;

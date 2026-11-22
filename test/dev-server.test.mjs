@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isInside, parseAddress, parseListeners } from '../src/dev-server.mjs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  detectBasePath,
+  isInside,
+  parseAddress,
+  parseElapsed,
+  parseListeners,
+} from '../src/dev-server.mjs';
+import { normalizeBasePath } from '../src/base-path.mjs';
 
 test('parses lsof listeners', () => {
   const output = [
@@ -53,4 +63,52 @@ test('checks that a directory is inside the project root', () => {
   assert.equal(isInside('/p/project', '/p/project/apps/web'), true);
   assert.equal(isInside('/p/project', '/p/project-old'), false);
   assert.equal(isInside('/p/project', '/p/other'), false);
+});
+
+test('parses process elapsed time', () => {
+  assert.equal(parseElapsed('03:55'), 235);
+  assert.equal(parseElapsed('1:03:55'), 3835);
+  assert.equal(parseElapsed('01-04:21:05'), 102065);
+  assert.equal(parseElapsed(''), null);
+  assert.equal(parseElapsed('nope'), null);
+});
+
+test('normalizes base paths', () => {
+  assert.equal(normalizeBasePath('/portfolio'), '/portfolio');
+  assert.equal(normalizeBasePath('/portfolio/'), '/portfolio');
+  assert.equal(normalizeBasePath('//portfolio///'), '/portfolio');
+  assert.equal(normalizeBasePath('https://example.com/portfolio/'), '/portfolio');
+  assert.equal(normalizeBasePath('/'), '');
+  assert.equal(normalizeBasePath(''), '');
+  assert.equal(normalizeBasePath('./portfolio'), '');
+});
+
+test('detects the base path from framework configs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pin-note-base-'));
+  try {
+    await writeFile(
+      join(root, 'astro.config.mjs'),
+      "export default { base: '/portfolio', vite: { server: { port: 4321 } } };\n",
+      'utf8'
+    );
+    assert.equal(await detectBasePath(root), '/portfolio');
+
+    await rm(join(root, 'astro.config.mjs'));
+    await writeFile(
+      join(root, 'next.config.mjs'),
+      "export default { basePath: '/docs' };\n",
+      'utf8'
+    );
+    assert.equal(await detectBasePath(root), '/docs');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+
+  const viteRoot = await mkdtemp(join(tmpdir(), 'pin-note-base-'));
+  try {
+    await writeFile(join(viteRoot, 'vite.config.js'), "export default { base: './' };\n", 'utf8');
+    assert.equal(await detectBasePath(viteRoot), '');
+  } finally {
+    await rm(viteRoot, { recursive: true, force: true });
+  }
 });
