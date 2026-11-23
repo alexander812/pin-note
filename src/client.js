@@ -28,6 +28,12 @@ const STATIC_HTML = `
     <button type="button" class="pn-current-task" data-action="open-current" data-role="current-task" title="Текущая задача">НОВАЯ ЗАДАЧА</button>
     <span class="pn-bar-hint" data-role="hint"></span>
     <span class="pn-bar-spacer"></span>
+    <button type="button" class="pn-reload" data-action="reload-site" data-role="reload-site" hidden title="Сайт обновился. Перезагрузить страницу">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Обновить сайт</span>
+    </button>
     <span class="pn-count" data-role="count" hidden aria-live="polite"></span>
     <button type="button" class="pn-panel-toggle" data-action="panel" aria-expanded="false" title="Открыть панель">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -133,7 +139,11 @@ const STATIC_HTML = `
             </button>
             <button type="button" class="pn-suggestion" data-action="reply" data-role="reply-button" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9 17-5-5 5-5M4 12h10a6 6 0 0 1 6 6v1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Ответить
+              <span>Ответить</span>
+            </button>
+            <button type="button" class="pn-suggestion pn-suggestion-stop" data-action="stop-fix-agent" data-role="stop-fix-button" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+              <span>Остановить агента</span>
             </button>
           </div>
         </div>
@@ -259,6 +269,8 @@ class ReviewClient {
       replyDrafts: {},
       replyOpen: false,
       replyBusy: null,
+      editingMessage: null,
+      uiSaveTimer: 0,
       taskActionBusy: false,
       taskCreateBusy: false,
       annotator: null,
@@ -306,6 +318,7 @@ class ReviewClient {
       currentTask: find('current-task'),
       hint: find('hint'),
       count: find('count'),
+      reloadSite: find('reload-site'),
       toggleLabel: find('toggle-label'),
       taskFilters: [...this.shadow.querySelectorAll('[data-action="task-filter"]')],
       taskCount: find('task-count'),
@@ -332,6 +345,7 @@ class ReviewClient {
       acceptFix: find('accept-fix'),
       acceptLabel: find('accept-label'),
       replyButton: find('reply-button'),
+      stopFixButton: find('stop-fix-button'),
       footer: this.shadow.querySelector('.pn-footer'),
       footerActions: find('footer-actions'),
       composer: find('composer'),
@@ -387,7 +401,13 @@ class ReviewClient {
       }
       event.preventDefault();
       event.stopPropagation();
-      this.handleAction(target.dataset.action, target.dataset.id, target.dataset.filter, target.dataset.color);
+      this.handleAction(
+        target.dataset.action,
+        target.dataset.id,
+        target.dataset.filter,
+        target.dataset.color,
+        target.dataset.messageId || ''
+      );
     });
 
     this.app.addEventListener('input', (event) => {
@@ -396,11 +416,21 @@ class ReviewClient {
         this.refs.saveButton.disabled = !target.value.trim();
         return;
       }
+      if (target?.matches?.('[data-role="edit-input"]')) {
+        if (this.state.editingMessage) {
+          this.state.editingMessage.draft = target.value;
+          const save = this.shadow.querySelector('[data-role="edit-save"]');
+          if (save) save.disabled = !target.value.trim();
+          this.scheduleUiSave();
+        }
+        return;
+      }
       if (target === this.refs.replyInput) {
         const key = this.replyDraftKey();
         if (key) this.state.replyDrafts[key] = target.value;
         const empty = !target.value.trim() || this.viewedTask()?.status === 'closed';
         this.refs.sendReply.disabled = empty;
+        this.scheduleUiSave();
       }
     });
 
@@ -445,6 +475,19 @@ class ReviewClient {
         if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           this.sendReply();
+        }
+        return;
+      }
+      if (target?.matches?.('[data-role="edit-input"]')) {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          this.cancelEditMessage();
+          return;
+        }
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          this.saveEditedMessage();
         }
         return;
       }
@@ -725,21 +768,44 @@ class ReviewClient {
   }
 
   restoreUiState() {
+    let saved = null;
     try {
       const raw = localStorage.getItem(this.pageLayoutKey());
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      if (saved?.taskFilter && ['active', 'closed', 'all'].includes(saved.taskFilter)) {
+      if (raw) saved = JSON.parse(raw);
+    } catch {
+      saved = null;
+    }
+    if (saved && typeof saved === 'object') {
+      if (saved.taskFilter && ['active', 'closed', 'all'].includes(saved.taskFilter)) {
         this.state.taskFilter = saved.taskFilter;
       }
-      if (saved?.currentTaskId && this.findTask(saved.currentTaskId)?.status !== 'closed') {
+      if (saved.currentTaskId && this.findTask(saved.currentTaskId)?.status !== 'closed') {
         this.state.currentTaskId = saved.currentTaskId;
       }
-      if (saved?.viewedTaskId && this.findTask(saved.viewedTaskId)) {
+      if (saved.viewedTaskId && this.findTask(saved.viewedTaskId)) {
         this.state.viewedTaskId = saved.viewedTaskId;
-        if (saved?.selectedFixId) this.state.activeId = saved.selectedFixId;
+        if (saved.selectedFixId) this.state.activeId = saved.selectedFixId;
       }
-      if (typeof saved?.panel === 'boolean') this.state.panel = saved.panel;
+      if (typeof saved.panel === 'boolean') this.state.panel = saved.panel;
+      if (saved.replyDrafts && typeof saved.replyDrafts === 'object') {
+        for (const [key, value] of Object.entries(saved.replyDrafts)) {
+          if (key && typeof value === 'string') this.state.replyDrafts[key] = value;
+        }
+      }
+      if (saved.replyOpen === true) this.state.replyOpen = true;
+      if (saved.editingMessage && typeof saved.editingMessage === 'object') {
+        const commentId = String(saved.editingMessage.commentId || '');
+        const messageId = saved.editingMessage.messageId
+          ? String(saved.editingMessage.messageId)
+          : null;
+        if (commentId) {
+          this.state.editingMessage = {
+            commentId,
+            messageId,
+            draft: String(saved.editingMessage.draft || ''),
+          };
+        }
+      }
       if (this.state.panel) {
         this.refs.panel.hidden = false;
         this.refs.panel.setAttribute('aria-hidden', 'false');
@@ -748,14 +814,48 @@ class ReviewClient {
         this.refs.toggleLabel.textContent = 'Закрыть';
         this.updatePageOffsets();
       }
-    } catch {
-      // Ignore damaged UI state.
     }
     this.normalizeSelection();
+    this.validateRestoredEditors();
     this.updateScrim();
+    this.updateReloadNotice();
+  }
+
+  validateRestoredEditors() {
+    const viewed = this.viewedTask();
+    if (this.state.replyOpen) {
+      const fix = this.selectedFix();
+      if (!viewed || !fix || viewed.status === 'closed') this.state.replyOpen = false;
+    }
+    const editing = this.state.editingMessage;
+    if (!editing) return;
+    const comment = this.findComment(editing.commentId);
+    if (!comment) {
+      this.state.editingMessage = null;
+      return;
+    }
+    if (editing.messageId) {
+      const message = this.commentUserMessage(comment, editing.messageId);
+      if (!message) {
+        this.state.editingMessage = null;
+        return;
+      }
+      if (!editing.draft) editing.draft = message.text || '';
+    } else if (!editing.draft) {
+      editing.draft = comment.comment || '';
+    }
+  }
+
+  scheduleUiSave() {
+    if (this.state.uiSaveTimer) return;
+    this.state.uiSaveTimer = setTimeout(() => {
+      this.state.uiSaveTimer = 0;
+      this.saveUiState();
+    }, 250);
   }
 
   saveUiState() {
+    const editing = this.state.editingMessage;
     try {
       localStorage.setItem(
         this.pageLayoutKey(),
@@ -765,6 +865,15 @@ class ReviewClient {
           currentTaskId: this.state.currentTaskId,
           viewedTaskId: this.state.viewedTaskId,
           selectedFixId: this.state.activeId,
+          replyDrafts: this.state.replyDrafts,
+          replyOpen: this.state.replyOpen,
+          editingMessage: editing
+            ? {
+                commentId: editing.commentId,
+                messageId: editing.messageId || null,
+                draft: editing.draft || '',
+              }
+            : null,
         })
       );
     } catch {
@@ -907,6 +1016,7 @@ class ReviewClient {
     this.state.taskMenuOpen = false;
     this.state.confirmAction = '';
     this.state.replyOpen = false;
+    this.state.editingMessage = null;
     this.state.viewedTaskId = task.id;
     if (task.status !== 'closed') {
       this.state.currentTaskId = task.id;
@@ -932,11 +1042,13 @@ class ReviewClient {
   backToTasks() {
     this.rememberReply();
     this.state.replyOpen = false;
+    this.state.editingMessage = null;
     this.state.viewedTaskId = null;
     this.state.taskMenuOpen = false;
     this.state.confirmAction = '';
     this.renderPanel();
     this.saveUiState();
+    this.maybeReload();
   }
 
   rememberReply() {
@@ -961,9 +1073,13 @@ class ReviewClient {
 
   finishReply(key) {
     delete this.state.replyDrafts[key];
-    if (this.replyDraftKey() !== key) return;
+    if (this.replyDraftKey() !== key) {
+      this.scheduleUiSave();
+      return;
+    }
     this.state.replyOpen = false;
     if (this.refs.replyInput) this.refs.replyInput.value = '';
+    this.saveUiState();
   }
 
   bindPage() {
@@ -980,6 +1096,10 @@ class ReviewClient {
     document.body?.addEventListener('scroll', onViewportChange, { passive: true });
     window.addEventListener('scroll', onViewportChange, { passive: true });
     window.addEventListener('resize', onViewportChange, { passive: true });
+    window.addEventListener('pagehide', () => this.saveUiState());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.saveUiState();
+    });
   }
 
   startTicker() {
@@ -1227,6 +1347,16 @@ class ReviewClient {
     } else if (payload.status === 'completed' && previous?.status === 'running') {
       this.toast('Агент завершил работу — проверьте комментарии');
     }
+    if (
+      (payload.status === 'running' || payload.status === 'queued') &&
+      payload.commentId &&
+      this.state.replyOpen &&
+      this.state.activeId === payload.commentId
+    ) {
+      this.rememberReply();
+      this.state.replyOpen = false;
+      this.saveUiState();
+    }
     if (this.state.panel) this.renderPanel();
   }
 
@@ -1253,23 +1383,81 @@ class ReviewClient {
   }
 
   onServerReload() {
+    const wasPending = this.state.pendingReload;
+    this.state.pendingReload = true;
+    this.updateReloadNotice();
     if (this.state.reloadScheduled) return;
-    if (this.state.compose) {
-      if (this.state.pendingReload) return;
-      this.state.pendingReload = true;
-      this.toast('Сайт обновился. Перезагрузка после закрытия комментария.');
+    if (this.hasUnsavedInput()) {
+      if (!wasPending) {
+        this.toast(
+          'Сайт обновился. Ввод сохранён — перезагрузка после отправки или по кнопке «Обновить сайт».'
+        );
+      }
       return;
     }
+    this.reloadSoon();
+  }
+
+  hasUnsavedInput() {
+    if (this.state.compose) return true;
+    if (this.state.replyOpen && String(this.refs.replyInput?.value || '').trim()) return true;
+    if (this.state.editingMessage && String(this.state.editingMessage.draft || '').trim()) return true;
+    const active = this.shadow.activeElement;
+    if (
+      active &&
+      (active === this.refs.replyInput ||
+        active === this.refs.input ||
+        active.matches?.('[data-role="edit-input"]'))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  updateReloadNotice() {
+    if (!this.refs.reloadSite) return;
+    const pending = Boolean(this.state.pendingReload && !this.state.reloadScheduled);
+    this.refs.reloadSite.hidden = !pending;
+    if (pending) {
+      const waiting = this.hasUnsavedInput();
+      this.refs.reloadSite.title = waiting
+        ? 'Сайт обновился. Текст сохранён — перезагрузите страницу после отправки или нажмите здесь.'
+        : 'Сайт обновился. Перезагрузить страницу';
+    }
+  }
+
+  reloadSoon() {
+    if (this.state.reloadScheduled || this.hasUnsavedInput()) return;
     this.state.reloadScheduled = true;
+    this.state.pendingReload = false;
+    this.updateReloadNotice();
     this.toast('Сайт обновился, перезагружаю…');
-    setTimeout(() => location.reload(), 350);
+    setTimeout(() => {
+      if (this.hasUnsavedInput()) {
+        // The customer started typing during the short delay: keep the page
+        // alive and let them finish; drafts are already persisted.
+        this.state.reloadScheduled = false;
+        this.state.pendingReload = true;
+        this.updateReloadNotice();
+        this.toast('Сайт обновился. Ввод сохранён — перезагрузка после отправки.', '');
+        return;
+      }
+      location.reload();
+    }, 350);
+  }
+
+  reloadNow() {
+    this.state.reloadScheduled = true;
+    this.state.pendingReload = false;
+    this.updateReloadNotice();
+    location.reload();
   }
 
   maybeReload() {
-    if (!this.state.pendingReload) return;
+    if (!this.state.pendingReload || this.state.reloadScheduled) return;
     this.state.pendingReload = false;
-    this.state.reloadScheduled = true;
-    setTimeout(() => location.reload(), 250);
+    this.updateReloadNotice();
+    this.reloadSoon();
   }
 
   async api(path, options = {}) {
@@ -1410,6 +1598,7 @@ class ReviewClient {
       this.state.taskMenuOpen = false;
       this.state.confirmAction = '';
       this.state.replyOpen = false;
+      this.state.editingMessage = null;
       this.state.editingId = null;
     }
     this.refs.panel.hidden = !this.state.panel;
@@ -1426,6 +1615,7 @@ class ReviewClient {
     if (this.state.panel) this.renderPanel();
     this.updateCounts();
     this.saveUiState();
+    if (!this.state.panel) this.maybeReload();
   }
 
   updateScrim() {
@@ -2647,6 +2837,7 @@ class ReviewClient {
     this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
     this.refs.panelButton.setAttribute('aria-expanded', String(this.state.panel));
     this.refs.toggleLabel.textContent = this.state.panel ? 'Закрыть' : 'Открыть';
+    this.updateReloadNotice();
   }
 
   renderTaskList() {
@@ -2768,16 +2959,18 @@ class ReviewClient {
       this.refs.messages.append(empty);
       this.refs.composer.hidden = true;
       this.refs.acceptFix.disabled = true;
+      this.refs.replyButton.hidden = false;
       this.refs.replyButton.disabled = true;
+      if (this.refs.stopFixButton) this.refs.stopFixButton.hidden = true;
     }
     const menuOpen = Boolean(this.state.taskMenuOpen);
     this.refs.taskMenu.hidden = !menuOpen;
     this.refs.taskMenuButton.setAttribute('aria-expanded', String(menuOpen));
     this.refs.taskMenuButton.disabled = false;
+    this.renderTaskAction(task);
     this.refs.footerActions.hidden =
       Boolean(this.state.confirmAction) ||
       (this.state.replyOpen && task.status !== 'closed');
-    this.renderTaskAction(task);
     this.refs.threadTitle.textContent = selected
       ? `// ДИАЛОГ · ПРАВКА ${String(this.fixNumber(selected)).padStart(2, '0')}`
       : '// ДИАЛОГ';
@@ -2909,7 +3102,19 @@ class ReviewClient {
 
   renderMessages(comment) {
     const container = this.refs.messages;
+    const editing = this.state.editingMessage;
+    if (
+      editing &&
+      editing.commentId === comment.id &&
+      !this.isAgentWorkingOnFix(comment) &&
+      container.querySelector('[data-role="edit-input"]')
+    ) {
+      // Do not rebuild the dialogue while the customer is typing: an SSE
+      // refresh or agent poll must not steal the caret or reset scroll.
+      return;
+    }
     const previousScroll = container.scrollTop;
+    const busy = this.isAgentWorkingOnFix(comment);
     container.replaceChildren();
     container.append(
       this.renderThreadBubble(
@@ -2918,13 +3123,26 @@ class ReviewClient {
           kind: 'initial',
           text: comment.comment || '',
           at: comment.createdAt,
+          editedAt: comment.editedAt,
           attachments: comment.attachments,
         },
-        { initial: true, screenshot: comment.screenshot }
+        {
+          initial: true,
+          screenshot: comment.screenshot,
+          editable: !busy,
+          commentId: comment.id,
+          messageId: null,
+        }
       )
     );
     for (const message of this.commentThreadMessages(comment)) {
-      container.append(this.renderThreadBubble(message));
+      container.append(
+        this.renderThreadBubble(message, {
+          editable: !busy && message.role === 'user' && Boolean(message.id),
+          commentId: comment.id,
+          messageId: message.id || null,
+        })
+      );
     }
     if (this.state.scrollMessages) {
       container.scrollTop = container.scrollHeight;
@@ -2937,6 +3155,17 @@ class ReviewClient {
   isAgentBusy(taskId) {
     const status = this.agentForTask(taskId)?.status;
     return status === 'running' || status === 'queued';
+  }
+
+  agentWorkingFixId(taskId) {
+    if (!this.isAgentBusy(taskId)) return null;
+    return this.agentForTask(taskId)?.commentId || null;
+  }
+
+  isAgentWorkingOnFix(comment) {
+    if (!comment) return false;
+    const fixId = this.agentWorkingFixId(comment.taskId);
+    return Boolean(fixId) && fixId === comment.id;
   }
 
   busyAgentTaskId() {
@@ -3097,10 +3326,24 @@ class ReviewClient {
 
   renderComposer(task, fix) {
     const closed = task.status === 'closed';
-    const open = this.state.replyOpen && !closed && !this.state.confirmAction;
+    const fixBusy = Boolean(fix) && this.isAgentWorkingOnFix(fix);
+    if (fixBusy && this.state.replyOpen) {
+      this.rememberReply();
+      this.state.replyOpen = false;
+      this.saveUiState();
+    }
+    const open = this.state.replyOpen && !closed && !fixBusy && !this.state.confirmAction;
     this.refs.composer.hidden = !open;
-    this.refs.replyButton.disabled = closed || !fix;
+    this.refs.replyButton.hidden = fixBusy;
+    this.refs.replyButton.disabled = closed || !fix || fixBusy;
     this.refs.replyButton.setAttribute('aria-expanded', String(open));
+    if (this.refs.stopFixButton) {
+      this.refs.stopFixButton.hidden = !fixBusy;
+      this.refs.stopFixButton.disabled = !fixBusy;
+      this.refs.stopFixButton.title = fixBusy
+        ? 'Прервать работу агента над этой правкой'
+        : 'Агент не работает над этой правкой';
+    }
     this.refs.acceptFix.disabled = closed || !fix || fix.status !== 'review';
     this.refs.acceptFix.setAttribute('aria-pressed', String(this.isFixAccepted(fix)));
     this.refs.acceptLabel.textContent = this.isFixAccepted(fix)
@@ -3176,7 +3419,15 @@ class ReviewClient {
     return messages;
   }
 
-  renderThreadBubble(message, { initial = false, screenshot = null } = {}) {
+  commentUserMessage(comment, messageId) {
+    const message = (comment?.thread || []).find((item) => item?.id === messageId) || null;
+    return message && message.role === 'user' ? message : null;
+  }
+
+  renderThreadBubble(
+    message,
+    { initial = false, screenshot = null, editable = false, commentId = '', messageId = null } = {}
+  ) {
     const role = ['user', 'agent', 'system'].includes(message?.role) ? message.role : 'user';
     const bubble = document.createElement('div');
     bubble.className = `pn-bubble is-${role}`;
@@ -3211,10 +3462,27 @@ class ReviewClient {
       head.append(kind);
     }
     if (time.textContent) head.append(time);
+    if (message?.editedAt) {
+      const edited = document.createElement('span');
+      edited.className = 'pn-bubble-edited';
+      edited.textContent = 'изменено';
+      edited.title = `Изменено ${this.formatTime(message.editedAt)}`;
+      head.append(edited);
+    }
     bubble.append(head);
 
+    const editing =
+      editable &&
+      commentId &&
+      this.state.editingMessage &&
+      this.state.editingMessage.commentId === commentId &&
+      (this.state.editingMessage.messageId || null) === (messageId || null);
+    if (editing) {
+      bubble.append(this.renderBubbleEditor(messageId ? 5000 : 10000));
+    }
+
     const textValue = String(message?.text || '');
-    if (textValue) {
+    if (textValue && !editing) {
       const text = document.createElement('div');
       text.className = 'pn-bubble-text';
       text.textContent = textValue;
@@ -3226,7 +3494,59 @@ class ReviewClient {
     if (screenshot?.file) {
       bubble.append(this.renderCommentScreenshot(screenshot));
     }
+    if (editable && commentId && !editing) {
+      bubble.append(this.renderBubbleActions(commentId, messageId));
+    }
     return bubble;
+  }
+
+  renderBubbleEditor(maxLength = 10000) {
+    const draft = String(this.state.editingMessage?.draft || '');
+    const box = document.createElement('div');
+    box.className = 'pn-bubble-editor';
+    const input = document.createElement('textarea');
+    input.rows = 3;
+    input.maxLength = maxLength;
+    input.dataset.role = 'edit-input';
+    input.value = draft;
+    input.setAttribute('aria-label', 'Редактировать сообщение');
+    const actions = document.createElement('div');
+    actions.className = 'pn-bubble-editor-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'pn-inline-btn pn-inline-primary';
+    save.dataset.action = 'save-message';
+    save.dataset.role = 'edit-save';
+    save.textContent = 'Сохранить';
+    save.disabled = !draft.trim();
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'pn-inline-btn';
+    cancel.dataset.action = 'cancel-edit-message';
+    cancel.textContent = 'Отмена';
+    actions.append(save, cancel);
+    box.append(input, actions);
+    return box;
+  }
+
+  renderBubbleActions(commentId, messageId) {
+    const actions = document.createElement('div');
+    actions.className = 'pn-bubble-actions';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'pn-bubble-edit';
+    edit.dataset.action = 'edit-message';
+    edit.dataset.id = commentId;
+    if (messageId) edit.dataset.messageId = messageId;
+    edit.title = 'Редактировать комментарий';
+    edit.setAttribute('aria-label', 'Редактировать комментарий');
+    edit.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+      '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>' +
+      '<path d="m13.5 6.5 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+      '</svg>';
+    actions.append(edit);
+    return actions;
   }
 
   attachmentUrl(attachment) {
@@ -3288,6 +3608,10 @@ class ReviewClient {
       this.toast('Задача закрыта — ответить нельзя', 'error');
       return;
     }
+    if (this.isAgentWorkingOnFix(comment)) {
+      this.toast('Агент работает над этой правкой — дождитесь завершения или остановите его', 'error');
+      return;
+    }
     this.rememberReply();
     const key = `${comment.taskId}/${comment.id}`;
     const text = String(
@@ -3314,6 +3638,7 @@ class ReviewClient {
         await this.refreshFromServer();
         this.toast(toAgent ? 'Правка отправлена агенту на рассмотрение' : 'Ответ сохранён');
         this.refs.replyButton.focus();
+        this.maybeReload();
         return;
       }
 
@@ -3343,6 +3668,7 @@ class ReviewClient {
       this.renderAll();
       this.toast('Ответ сохранён');
       this.refs.replyButton.focus();
+      this.maybeReload();
     } catch (err) {
       this.toast(err.message || 'Не удалось сохранить ответ', 'error');
       this.renderPanel();
@@ -3390,7 +3716,7 @@ class ReviewClient {
     }).format(date);
   }
 
-  async handleAction(action, id, filter, color) {
+  async handleAction(action, id, filter, color, messageId = '') {
     if (action !== 'task-menu') this.state.taskMenuOpen = false;
     switch (action) {
       case 'mode':
@@ -3443,10 +3769,27 @@ class ReviewClient {
         this.rememberReply();
         this.state.replyOpen = false;
         this.renderPanel();
+        this.saveUiState();
+        this.maybeReload();
         this.refs.replyButton.focus();
         break;
       case 'send-reply':
         await this.sendReply();
+        break;
+      case 'stop-fix-agent':
+        await this.stopFixAgent();
+        break;
+      case 'edit-message':
+        this.startEditMessage(id, messageId);
+        break;
+      case 'save-message':
+        await this.saveEditedMessage();
+        break;
+      case 'cancel-edit-message':
+        this.cancelEditMessage();
+        break;
+      case 'reload-site':
+        this.reloadNow();
         break;
       case 'task-action':
         await this.runTaskAction();
@@ -3544,6 +3887,9 @@ class ReviewClient {
     const comment = this.findComment(id);
     if (!comment) return;
     this.rememberReply();
+    if (this.state.editingMessage && this.state.editingMessage.commentId !== id) {
+      this.state.editingMessage = null;
+    }
     this.state.activeId = id;
     this.state.replyOpen = false;
     this.state.taskMenuOpen = false;
@@ -3642,9 +3988,15 @@ class ReviewClient {
       this.toast('Ответить можно только в открытой задаче', 'error');
       return;
     }
+    if (this.isAgentWorkingOnFix(fix)) {
+      this.toast('Агент работает над этой правкой — дождитесь завершения или остановите его', 'error');
+      return;
+    }
     this.state.replyOpen = true;
+    this.state.editingMessage = null;
     this.state.confirmAction = '';
     this.renderPanel();
+    this.saveUiState();
     requestAnimationFrame(() => {
       this.refs.replyInput.focus();
       this.refs.replyInput.setSelectionRange(
@@ -3652,6 +4004,136 @@ class ReviewClient {
         this.refs.replyInput.value.length
       );
     });
+  }
+
+  startEditMessage(commentId, messageId = '') {
+    const comment = this.findComment(commentId);
+    if (!comment) return;
+    if (this.isAgentWorkingOnFix(comment)) {
+      this.toast('Агент работает над этой правкой — дождитесь завершения', 'error');
+      return;
+    }
+    const forMessage = Boolean(messageId);
+    const message = forMessage ? this.commentUserMessage(comment, messageId) : null;
+    if (forMessage && !message) {
+      this.toast('Это сообщение нельзя редактировать', 'error');
+      return;
+    }
+    this.rememberReply();
+    this.state.replyOpen = false;
+    this.state.editingMessage = {
+      commentId,
+      messageId: forMessage ? messageId : null,
+      draft: String(forMessage ? message.text || '' : comment.comment || ''),
+    };
+    this.state.scrollMessages = false;
+    this.renderPanel();
+    this.saveUiState();
+    requestAnimationFrame(() => {
+      const input = this.shadow.querySelector('[data-role="edit-input"]');
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
+  cancelEditMessage() {
+    if (!this.state.editingMessage) return;
+    this.state.editingMessage = null;
+    this.renderPanel();
+    this.saveUiState();
+    this.maybeReload();
+  }
+
+  async saveEditedMessage() {
+    const editing = this.state.editingMessage;
+    if (!editing || this.state.busy) return;
+    const comment = this.findComment(editing.commentId);
+    if (!comment) return;
+    if (this.isAgentWorkingOnFix(comment)) {
+      this.toast('Агент работает над этой правкой — редактирование недоступно', 'error');
+      return;
+    }
+    const input = this.shadow.querySelector('[data-role="edit-input"]');
+    const nextText = String(input?.value ?? editing.draft ?? '').trim();
+    if (!nextText) {
+      this.toast('Комментарий не может быть пустым', 'error');
+      input?.focus();
+      return;
+    }
+    const messageId = editing.messageId || null;
+    const currentText = messageId
+      ? this.commentUserMessage(comment, messageId)?.text || ''
+      : comment.comment || '';
+    if (nextText === currentText.trim()) {
+      this.state.editingMessage = null;
+      this.renderPanel();
+      this.saveUiState();
+      this.maybeReload();
+      return;
+    }
+    const saveButton = this.shadow.querySelector('[data-role="edit-save"]');
+    this.state.busy = true;
+    if (saveButton) saveButton.disabled = true;
+    try {
+      if (!this.state.server) {
+        const now = new Date().toISOString();
+        if (messageId) {
+          const message = this.commentUserMessage(comment, messageId);
+          if (!message) throw new Error('Сообщение не найдено');
+          const previousText = message.text;
+          message.text = nextText;
+          message.editedAt = now;
+          if (
+            comment.rejection?.reason === previousText &&
+            (message.kind === 'rejection' || message.kind === 'reply')
+          ) {
+            comment.rejection = { ...comment.rejection, reason: nextText };
+          }
+        } else {
+          comment.comment = nextText;
+          comment.editedAt = now;
+        }
+        comment.updatedAt = now;
+        this.state.editingMessage = null;
+        this.saveLocal();
+        this.renderAll();
+        this.toast('Комментарий изменён');
+        this.maybeReload();
+        return;
+      }
+
+      if (messageId) {
+        await this.api(
+          `/comments/${encodeURIComponent(comment.id)}/messages/${encodeURIComponent(messageId)}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ text: nextText }),
+          }
+        );
+      } else {
+        const saved = await this.updateComment(
+          comment.id,
+          { comment: nextText, dispatchAgent: false },
+          { toast: false, render: false }
+        );
+        if (!saved) return;
+      }
+      this.state.editingMessage = null;
+      await this.refreshFromServer();
+      this.renderAll();
+      this.toast('Комментарий изменён');
+      this.maybeReload();
+    } catch (err) {
+      this.toast(err.message || 'Не удалось изменить комментарий', 'error');
+    } finally {
+      this.state.busy = false;
+      if (this.state.editingMessage) {
+        const save = this.shadow.querySelector('[data-role="edit-save"]');
+        if (save) save.disabled = !String(this.state.editingMessage.draft || '').trim();
+        this.renderPanel();
+      }
+    }
   }
 
   async approveSelectedFix() {
@@ -3947,10 +4429,11 @@ class ReviewClient {
     }
     const { counts } = this.taskCounts(task.id);
     const effectiveMode = mode || (counts.rejected > 0 ? 'rework' : 'task');
+    const focusedFix = this.taskFixes(task.id).find((fix) => fix.id === this.state.activeId) || null;
     try {
       const data = await this.api(`/tasks/${encodeURIComponent(task.id)}/agent`, {
         method: 'POST',
-        body: JSON.stringify({ mode: effectiveMode }),
+        body: JSON.stringify({ mode: effectiveMode, commentId: focusedFix?.id || null }),
       });
       if (data?.agent) this.applyAgentEvent(data.agent);
       this.toast(
@@ -3961,6 +4444,17 @@ class ReviewClient {
     } catch (err) {
       this.toast(err.message || 'Не удалось отправить задачу агенту', 'error');
     }
+  }
+
+  async stopFixAgent() {
+    const task = this.viewedTask();
+    const fix = this.selectedFix();
+    if (!task || !fix) return;
+    if (!this.isAgentWorkingOnFix(fix)) {
+      this.renderPanel();
+      return;
+    }
+    await this.cancelAgent(task.id);
   }
 
   async cancelAgent(taskId = null, { silent = false } = {}) {
@@ -4057,7 +4551,10 @@ class ReviewClient {
       const now = new Date().toISOString();
       const previousResolution = String(comment.resolution || '');
       let rejectionReason = '';
-      if (patch.comment !== undefined) comment.comment = patch.comment;
+      if (patch.comment !== undefined) {
+        comment.comment = patch.comment;
+        comment.editedAt = now;
+      }
       if (patch.resolution !== undefined) comment.resolution = patch.resolution;
       comment.updatedAt = now;
       if (patch.status) {

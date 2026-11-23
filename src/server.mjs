@@ -351,6 +351,10 @@ export async function createReviewServer(options = {}) {
       const comments = state.comments.filter((comment) => comment.taskId === task.id);
       if (!comments.some((comment) => isOpenStatus(comment.status))) continue;
       const mode = comments.some((comment) => comment.status === 'rejected') ? 'rework' : 'task';
+      const focusComment =
+        comments.find((comment) => comment.status === 'rejected') ||
+        comments.find((comment) => isOpenStatus(comment.status)) ||
+        null;
       const providerLabel = agentRunner.publicConfig().label;
       const prompt =
         mode === 'rework'
@@ -370,7 +374,12 @@ export async function createReviewServer(options = {}) {
             });
       agentBatch.current = task.id;
       try {
-        agentRunner.dispatch(task, { prompt, mode, replaceQueued: mode === 'rework' });
+        agentRunner.dispatch(task, {
+          prompt,
+          mode,
+          commentId: focusComment?.id || null,
+          replaceQueued: mode === 'rework',
+        });
       } catch (err) {
         agentBatch.current = null;
         console.error(`[pin-note] пакетный запуск агента: ${err.message}`);
@@ -1067,6 +1076,19 @@ export async function createReviewServer(options = {}) {
       }
       notifyComments();
       sendJson(response, 200, { ...result, agent });
+      return;
+    }
+
+    const messageRoute = /^comments\/([^/]+)\/messages\/([^/]+)$/.exec(route);
+    if (messageRoute && method === 'PATCH') {
+      assertSameOrigin(request);
+      requireJson(request);
+      const body = await readJson(request);
+      const commentId = decodeURIComponent(messageRoute[1]);
+      const messageId = decodeURIComponent(messageRoute[2]);
+      const result = await store.updateMessage(commentId, messageId, body);
+      notifyComments();
+      sendJson(response, 200, result);
       return;
     }
 

@@ -170,6 +170,8 @@ function sanitizeThreadMessage(raw) {
     text: messageText,
     at: timestamp(raw.at, null) || new Date().toISOString(),
   };
+  const editedAt = timestamp(raw.editedAt, null);
+  if (editedAt) message.editedAt = editedAt;
   const attachments = sanitizeAttachments(raw.attachments);
   if (attachments.length > 0) message.attachments = attachments;
   return message;
@@ -181,7 +183,23 @@ function normalizeCommentThread(comment) {
   if (rawThread && rawThread.length > 0) {
     const messages = rawThread
       .slice(-MAX_THREAD_MESSAGES)
-      .map((message) => sanitizeThreadMessage(message))
+      .map((raw) => {
+        const message = sanitizeThreadMessage(raw);
+        if (!message) {
+          changed = true;
+          return null;
+        }
+        if (
+          message.id !== raw?.id ||
+          message.text !== raw?.text ||
+          message.at !== raw?.at ||
+          message.role !== raw?.role ||
+          message.kind !== raw?.kind
+        ) {
+          changed = true;
+        }
+        return message;
+      })
       .filter(Boolean);
     if (messages.length !== rawThread.length) changed = true;
     comment.thread = messages;
@@ -370,7 +388,7 @@ function timestamp(value, fallback = null) {
 }
 
 function sanitizeCommentExtras(comment) {
-  for (const key of ['reviewedAt', 'approvedAt', 'rejectedAt', 'resolvedAt']) {
+  for (const key of ['editedAt', 'reviewedAt', 'approvedAt', 'rejectedAt', 'resolvedAt']) {
     if (comment[key] === undefined) continue;
     const value = timestamp(comment[key], null);
     if (value) comment[key] = value;
@@ -900,6 +918,7 @@ export class ReviewStore {
       const previousResolution = text(comment.resolution, 5000).trim();
       let rejectionReason = '';
       let changed = false;
+      let taskDescriptionEdited = false;
       if (patch?.status !== undefined) {
         if (!STATUSES.includes(patch.status)) throw error('Неизвестный статус', 400);
         if (task && task.status !== 'active' && patch.status !== comment.status) {
@@ -926,7 +945,16 @@ export class ReviewStore {
       if (patch?.comment !== undefined) {
         const commentText = text(patch.comment, 10000).trim();
         if (!commentText) throw error('Комментарий не может быть пустым', 400);
+        const previousCommentText = comment.comment;
         comment.comment = commentText;
+        if (
+          task &&
+          (placeholderTaskDescription(task) ||
+            task.description === shortDescription(previousCommentText, 120))
+        ) {
+          task.description = shortDescription(commentText, 120);
+          taskDescriptionEdited = true;
+        }
         changed = true;
       }
       let resolutionText = null;
@@ -951,6 +979,8 @@ export class ReviewStore {
 
       const now = new Date().toISOString();
       comment.updatedAt = now;
+      if (patch?.comment !== undefined) comment.editedAt = now;
+      if (taskDescriptionEdited && task) task.updatedAt = now;
       if (!Array.isArray(comment.thread)) comment.thread = [];
 
       if (resolutionText) {
@@ -984,6 +1014,45 @@ export class ReviewStore {
 
       await this.write(store);
       return comment;
+    });
+  }
+
+  updateMessage(commentId, messageId, patch) {
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const comment = store.comments.find((item) => item.id === commentId);
+      if (!comment) throw error('Комментарий не найден', 404);
+      const task = taskForComment(store, comment);
+      if (!task) throw error('Задача комментария не найдена', 404);
+      const thread = Array.isArray(comment.thread) ? comment.thread : [];
+      const message = thread.find((item) => item.id === messageId);
+      if (!message) throw error('Сообщение не найдено', 404);
+      if (message.role !== 'user') {
+        throw error('Можно редактировать только сообщения заказчика', 400);
+      }
+      const nextText = text(patch?.text ?? patch?.message, 5000).trim();
+      if (!nextText) throw error('Сообщение не может быть пустым', 400);
+      if (nextText === message.text) {
+        return { comment, task: taskSummary(task, store.comments) };
+      }
+
+      const now = new Date().toISOString();
+      const previousText = message.text;
+      message.text = nextText;
+      message.editedAt = now;
+      comment.updatedAt = now;
+
+      // A customer reply becomes the rejection reason; keep that copy in sync
+      // when the customer corrects the wording of their message.
+      if (
+        comment.rejection?.reason === previousText &&
+        (message.kind === 'rejection' || message.kind === 'reply')
+      ) {
+        comment.rejection = { ...comment.rejection, reason: nextText };
+      }
+
+      await this.write(store);
+      return { comment, task: taskSummary(task, store.comments) };
     });
   }
 

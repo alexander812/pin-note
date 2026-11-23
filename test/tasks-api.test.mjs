@@ -308,6 +308,55 @@ test('creates an empty task through the review API and selects it as current', a
   }
 });
 
+test('edits customer messages through the review API', async () => {
+  const created = await createComment('Поправь текст ответа');
+  const id = created.body.comment.id;
+
+  await json(`/__review/comments/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'review', resolution: 'Готово' }),
+  });
+  const reply = await json(`/__review/comments/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'Старый ответ', dispatchAgent: false }),
+  });
+  const messageId = reply.body.comment.thread.at(-1).id;
+
+  const edited = await json(
+    `/__review/comments/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'Новый ответ' }),
+    }
+  );
+  assert.equal(edited.response.status, 200);
+  assert.equal(edited.body.comment.thread.at(-1).text, 'Новый ответ');
+  assert.ok(edited.body.comment.thread.at(-1).editedAt);
+  assert.equal(edited.body.comment.rejection.reason, 'Новый ответ');
+
+  const initial = await json(`/__review/comments/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ comment: 'Новый первый текст' }),
+  });
+  assert.equal(initial.response.status, 200);
+  assert.equal(initial.body.comment.comment, 'Новый первый текст');
+  assert.ok(initial.body.comment.editedAt);
+
+  const empty = await json(
+    `/__review/comments/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '   ' }),
+    }
+  );
+  assert.equal(empty.response.status, 400);
+});
+
 test('forwards taskId to the store and rejects comments for a closed task', async () => {
   const isolatedRoot = await mkdtemp(join(tmpdir(), 'pin-note-taskid-api-'));
   const isolated = await createReviewServer({ root: isolatedRoot, watch: false });

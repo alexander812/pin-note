@@ -385,6 +385,38 @@ test('keeps a comment dialogue and turns customer replies into rework', async ()
   assert.match(markdown, /Теперь 24px/);
 });
 
+test('edits customer messages and keeps the rejection reason in sync', async () => {
+  const { store } = await makeStore();
+  const comment = await addComment(store, 'Сделай отступ у кнопки');
+
+  const reviewed = await store.update(comment.id, {
+    status: 'review',
+    resolution: 'Добавил отступ 12px',
+  });
+  const rejected = await store.reply(comment.id, 'Нужно 24px');
+  const replyMessage = rejected.comment.thread.at(-1);
+  assert.equal(replyMessage.role, 'user');
+
+  const edited = await store.updateMessage(comment.id, replyMessage.id, {
+    text: 'Нужно 32px',
+  });
+  assert.equal(edited.comment.thread.at(-1).text, 'Нужно 32px');
+  assert.ok(edited.comment.thread.at(-1).editedAt);
+  assert.equal(edited.comment.rejection.reason, 'Нужно 32px');
+  assert.equal(edited.comment.status, 'rejected');
+
+  await assert.rejects(
+    () => store.updateMessage(comment.id, reviewed.thread[0].id, { text: 'Чужое сообщение' }),
+    (err) => err.status === 400
+  );
+
+  const initial = await store.update(comment.id, { comment: 'Сделай отступ у кнопки 32px' });
+  assert.equal(initial.comment, 'Сделай отступ у кнопки 32px');
+  assert.ok(initial.editedAt);
+  const task = (await store.read()).tasks[0];
+  assert.equal(task.description, 'Сделай отступ у кнопки 32px');
+});
+
 test('stores attachments with comments and removes them with the comment', async () => {
   const { store, dataDir } = await makeStore();
   const attachment = await store.saveAttachment(Buffer.from('hello'), {
