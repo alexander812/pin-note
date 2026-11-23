@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
 import { access, readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { normalizeBasePath } from '../src/base-path.mjs';
+import { checkAgentReadiness, resolveAgentConfig } from '../src/agent.mjs';
+import { installAgentCli, installInfo, installSupported } from '../src/agent-install.mjs';
 import { detectDevServer } from '../src/dev-server.mjs';
 import { createReviewServer } from '../src/server.mjs';
 import { ReviewStore } from '../src/store.mjs';
+import { runWizard } from '../src/wizard.mjs';
 import {
   formatCommentMarkdown,
   formatTaskDate,
@@ -19,12 +23,22 @@ const HELP = `PinNote 0.1.0
 
 Использование:
   pin-note [directory] [options]
+  pin-note wizard
   pin-note tasks <command> [options]
   pin-note comments <command> [options]
+  pin-note agent check [options]
 
 Аргументы:
   directory           Папка со статическим сайтом или корень проекта
                       (по умолчанию текущая; в ней ищется dev-сервер)
+
+Мастер:
+  wizard              Спросить папку проекта и агента, проверить готовность
+                      и запустить review-сервер (то же при запуске без аргументов)
+
+Команды агента:
+  agent check         Проверить, готов ли выбранный агент к работе
+                      (--agent dsh|codex|custom, --project <dir>, --json)
 
 Команды задач:
   tasks list          Список задач
@@ -38,8 +52,8 @@ const HELP = `PinNote 0.1.0
 Команды комментариев:
   comments list       Список комментариев (--task current|all|T-1, --status open)
   comments show <id>  Показать комментарий
-  comments resolve <id> --resolution "..."  Отметить решённым
-  comments set-status <id> --status orphaned|wontfix --resolution "..."
+  comments resolve <id> --resolution "..."  Отправить на проверку (статус review)
+  comments set-status <id> --status review|resolved|wontfix|orphaned --resolution "..."
   comments reopen <id> Вернуть комментарий в текущую задачу
 
 Опции команд:
@@ -59,6 +73,12 @@ const HELP = `PinNote 0.1.0
       --data-dir <dir> Каталог для comments.json, feedback.md и AGENT.md (по умолчанию <directory>/.review)
       --source-dir <dir> Где искать исходники для подсказок (по умолчанию <directory>)
       --spa           Отдавать index.html для неизвестных HTML-маршрутов
+      --agent <name>  AI-агент: dsh, codex, custom или off (по умолчанию автоопределение)
+      --agent-command <cmd>  Команда агента (переопределяет провайдера)
+      --agent-config <file>  JSON-конфиг агента (по умолчанию <data-dir>/agent.json)
+      --model <name>  Модель агента (для Codex — --model; пусто — из конфига)
+      --no-agent      Не запускать AI-агента
+      --no-wizard     Не запускать мастер при вызове без аргументов
       --no-open       Не открывать браузер автоматически
       --no-watch      Не следить за файлами и не перезагружать страницу
   -h, --help          Показать эту справку
@@ -79,6 +99,11 @@ function parseArgs(argv) {
     open: true,
     watch: true,
     explicitPort: false,
+    agent: null,
+    agentCommand: null,
+    agentConfig: null,
+    agentModel: null,
+    noWizard: false,
   };
   let directorySet = false;
 
@@ -100,6 +125,42 @@ function parseArgs(argv) {
     }
     if (arg === '--spa') {
       options.spa = true;
+      continue;
+    }
+    if (arg === '--no-agent') {
+      options.agent = 'off';
+      continue;
+    }
+    if (arg === '--no-wizard') {
+      options.noWizard = true;
+      continue;
+    }
+    if (arg === '--agent') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указан AI-агент');
+      options.agent = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--agent-command') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указана команда агента');
+      options.agentCommand = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--agent-config') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указан конфиг агента');
+      options.agentConfig = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--model') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('Не указана модель агента');
+      options.agentModel = value;
+      index += 1;
       continue;
     }
     if (arg === '--port' || arg === '-p') {
@@ -223,6 +284,11 @@ function parseCommandArgs(argv) {
     description: undefined,
     resolution: undefined,
     resolutionStdin: false,
+    agent: null,
+    agentCommand: null,
+    agentConfig: null,
+    model: null,
+    install: false,
     help: false,
   };
   const positional = [];
@@ -237,6 +303,10 @@ function parseCommandArgs(argv) {
       options.json = true;
       continue;
     }
+    if (arg === '--install') {
+      options.install = true;
+      continue;
+    }
     if (arg === '--confirm' || arg === '-y') {
       options.confirm = true;
       continue;
@@ -245,7 +315,7 @@ function parseCommandArgs(argv) {
       options.resolutionStdin = true;
       continue;
     }
-    if (arg === '--project' || arg === '--data-dir' || arg === '--task' || arg === '--status' || arg === '--description' || arg === '--resolution') {
+    if (arg === '--project' || arg === '--data-dir' || arg === '--task' || arg === '--status' || arg === '--description' || arg === '--resolution' || arg === '--agent' || arg === '--agent-command' || arg === '--agent-config' || arg === '--model') {
       const value = argv[index + 1];
       if (value === undefined || value.startsWith('-')) throw new Error(`Не указано значение для ${arg}`);
       if (arg === '--project') options.project = value;
@@ -254,6 +324,10 @@ function parseCommandArgs(argv) {
       if (arg === '--status') options.status = value;
       if (arg === '--description') options.description = value;
       if (arg === '--resolution') options.resolution = value;
+      if (arg === '--agent') options.agent = value;
+      if (arg === '--agent-command') options.agentCommand = value;
+      if (arg === '--agent-config') options.agentConfig = value;
+      if (arg === '--model') options.model = value;
       index += 1;
       continue;
     }
@@ -273,7 +347,7 @@ async function openCommandStore(options) {
 
 function printTaskLine(task) {
   const counts = task.counts || {};
-  const done = (counts.resolved || 0) + (counts.wontfix || 0);
+  const done = (counts.approved || 0) + (counts.resolved || 0) + (counts.wontfix || 0);
   const total = task.total || 0;
   const description = task.description ? ` · ${task.description}` : '';
   return `${taskTag(task)} · ${formatTaskDate(task.createdAt)} · ${taskStatusLabel(task.status)} · ${done}/${total}${description}`;
@@ -281,7 +355,8 @@ function printTaskLine(task) {
 
 function printCommentLine(comment, task) {
   const tag = task ? taskTag(task) : '';
-  return `${comment.id} · ${tag ? `${tag} · ` : ''}${comment.status} · ${comment.comment}`;
+  const reason = comment.rejection?.reason ? ` · причина отклонения: ${comment.rejection.reason}` : '';
+  return `${comment.id} · ${tag ? `${tag} · ` : ''}${comment.status}${reason} · ${comment.comment}`;
 }
 
 async function readStdinText() {
@@ -374,7 +449,8 @@ async function runTasksCommand(argv) {
       return;
     }
     if (subcommand === 'submit') {
-      const taskRef = positional[0] || options.task || 'current';
+      const hasActive = Boolean(await store.currentTask());
+      const taskRef = positional[0] || options.task || (hasActive ? 'current' : 'latest');
       const task = await store.submitTask(taskRef);
       if (options.json) {
         process.stdout.write(`${JSON.stringify({ task }, null, 2)}\n`);
@@ -438,7 +514,7 @@ async function runCommentsCommand(argv) {
   list [--task current|all|T-1] [--status open]
   show <id>
   resolve <id> --resolution "..." | --resolution-stdin
-  set-status <id> --status orphaned|wontfix --resolution "..."
+  set-status <id> --status review|resolved|wontfix|orphaned --resolution "..."
   reopen <id>
 
 Опции: --project <dir>, --data-dir <dir>, --json`);
@@ -462,7 +538,7 @@ async function runCommentsCommand(argv) {
     const store = await openCommandStore(options);
     if (subcommand === 'list') {
       const state = await store.read();
-      const taskRef = options.task || 'current';
+      const taskRef = options.task || (options.status === 'rejected' ? 'all' : 'current');
       let task = null;
       let comments = state.comments;
       if (taskRef !== 'all') {
@@ -507,11 +583,11 @@ async function runCommentsCommand(argv) {
       if (resolution === undefined || !resolution.trim()) {
         throw new Error('Укажи --resolution "..." или --resolution-stdin');
       }
-      const comment = await store.update(id, { status: 'resolved', resolution });
+      const comment = await store.update(id, { status: 'review', resolution });
       if (options.json) {
         process.stdout.write(`${JSON.stringify({ comment }, null, 2)}\n`);
       } else {
-        console.log(`${comment.id} · resolved`);
+        console.log(`${comment.id} · review (на проверке)`);
       }
       return;
     }
@@ -525,11 +601,14 @@ async function runCommentsCommand(argv) {
           : options.resolutionStdin
             ? await readStdinText()
             : undefined;
-      if (['resolved', 'wontfix', 'orphaned'].includes(options.status) && !resolution?.trim()) {
+      if (['resolved', 'rejected', 'wontfix', 'orphaned'].includes(options.status) && !resolution?.trim()) {
         throw new Error('Для этого статуса укажи --resolution "..."');
       }
       const patch = { status: options.status };
-      if (resolution !== undefined) patch.resolution = resolution;
+      if (resolution !== undefined) {
+        patch.resolution = resolution;
+        if (options.status === 'rejected') patch.rejectionReason = resolution;
+      }
       const comment = await store.update(id, patch);
       if (options.json) {
         process.stdout.write(`${JSON.stringify({ comment }, null, 2)}\n`);
@@ -555,14 +634,153 @@ async function runCommentsCommand(argv) {
   }
 }
 
-async function main() {
-  const rawArgv = process.argv.slice(2);
+async function askYesNo(question, defaultValue = 'n') {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${question} [${defaultValue}] `)).trim() || defaultValue;
+    return /^y/i.test(answer);
+  } finally {
+    rl.close();
+  }
+}
+
+async function runAgentCommand(argv) {
+  const subcommand = argv[0];
+  if (!subcommand || subcommand === '--help' || subcommand === '-h') {
+    console.log(`pin-note agent <command> [options]
+
+  check        Проверить готовность агента к работе
+
+Опции: --project <dir>, --data-dir <dir>, --agent dsh|codex|custom|off,
+       --agent-command <cmd>, --agent-config <file>, --model <name>,
+       --install, --json`);
+    return;
+  }
+  if (subcommand !== 'check') {
+    console.error(`[pin-note] Неизвестная команда agent: ${subcommand}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  let options;
+  try {
+    ({ options } = parseCommandArgs(argv.slice(1)));
+  } catch (err) {
+    reportCommandError(err, false);
+    return;
+  }
+  if (options.help) {
+    console.log('Смотри pin-note agent --help');
+    return;
+  }
+
+  try {
+    const root = resolve(options.project || process.cwd());
+    if (!(await isDirectory(root))) throw new Error(`Папка не найдена: ${root}`);
+    const dataDir = options.dataDir ? resolve(options.dataDir) : join(root, '.review');
+    let config = await resolveAgentConfig({
+      options: {
+        provider: options.agent || undefined,
+        command: options.agentCommand || undefined,
+        configFile: options.agentConfig || undefined,
+        model: options.model || undefined,
+      },
+      dataDir,
+      root,
+    });
+    let readiness = await checkAgentReadiness(config, { root, dataDir });
+
+    if (
+      !readiness.ready &&
+      config.missingCommand &&
+      installSupported(config.provider)
+    ) {
+      const info = installInfo(config.provider);
+      const shouldInstall =
+        options.install ||
+        (!options.json &&
+          (await askYesNo(`${info.label} не найден. Установить ${info.command}? (y/N)`, 'n')));
+      if (shouldInstall) {
+        const result = await installAgentCli(config.provider, {
+          cwd: root,
+          quiet: Boolean(options.json),
+          log: options.json ? (...args) => console.error(...args) : console.log,
+        });
+        if (!result.ok) {
+          console.error(`[pin-note] ${result.error}`);
+        } else if (result.warning || !result.command) {
+          console.error(`[pin-note] ${result.warning || 'Команда не найдена после установки.'}`);
+        } else {
+          config = await resolveAgentConfig({
+            options: {
+              provider: config.provider,
+              command: result.command,
+              configFile: options.agentConfig || undefined,
+            },
+            dataDir,
+            root,
+          });
+          readiness = await checkAgentReadiness(config, { root, dataDir });
+        }
+      }
+    }
+
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(readiness, null, 2)}\n`);
+    } else {
+      const icons = { ok: '✓', warn: '!', fail: '✗', skip: '–' };
+      console.log(`Агент: ${readiness.label} (${readiness.provider})`);
+      for (const check of readiness.checks) {
+        console.log(`  ${icons[check.status] || '–'} ${check.label}: ${check.detail}`);
+      }
+      console.log(`\n${readiness.summary}`);
+    }
+    process.exitCode = readiness.ready ? 0 : 1;
+  } catch (err) {
+    reportCommandError(err, options.json);
+  }
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const rawArgv = argv;
+  if (rawArgv[0] === 'agent') {
+    await runAgentCommand(rawArgv.slice(1));
+    return;
+  }
   if (rawArgv[0] === 'tasks' || rawArgv[0] === 'task') {
     await runTasksCommand(rawArgv.slice(1));
     return;
   }
   if (rawArgv[0] === 'comments') {
     await runCommentsCommand(rawArgv.slice(1));
+    return;
+  }
+
+  const wizardRequested = rawArgv[0] === 'wizard' || rawArgv[0] === 'setup';
+  const wizardByDefault =
+    rawArgv.length === 0 &&
+    process.stdin.isTTY &&
+    process.stdout.isTTY &&
+    !process.env.PIN_NOTE_NO_WIZARD;
+  if (wizardRequested || wizardByDefault) {
+    let result;
+    const wizardCwd =
+      rawArgv[1] && !rawArgv[1].startsWith('-') ? resolve(rawArgv[1]) : process.cwd();
+    try {
+      result = await runWizard({ cwd: wizardCwd });
+    } catch (err) {
+      console.error(`[pin-note] ${err.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!result) return;
+    const nextArgv = [result.directory];
+    if (result.dataDir) nextArgv.push('--data-dir', result.dataDir);
+    if (result.agent?.provider) nextArgv.push('--agent', result.agent.provider);
+    if (result.agent?.command) nextArgv.push('--agent-command', result.agent.command);
+    if (result.agent?.configFile) nextArgv.push('--agent-config', result.agent.configFile);
+    await main(nextArgv);
     return;
   }
 
@@ -643,6 +861,12 @@ async function main() {
       basePath: options.basePath || undefined,
       watch: options.watch,
       spa: options.spa,
+      agent: {
+        provider: options.agent || undefined,
+        command: options.agentCommand || undefined,
+        configFile: options.agentConfig || undefined,
+        model: options.agentModel || undefined,
+      },
     });
   } catch (err) {
     console.error(`[pin-note] ${err.message}`);
@@ -678,6 +902,18 @@ async function main() {
   }
   console.log(`  Review:    ${reviewUrl}`);
   console.log(`  Комментарии: ${displayPath(review.store.commentsFile)}`);
+  const agent = review.agent?.publicConfig?.();
+  if (agent?.enabled) {
+    console.log(
+      `  Агент:     ${agent.label} (${agent.provider}, ${agent.command})` +
+        (agent.model ? ` · модель ${agent.model}` : '')
+    );
+  } else {
+    console.log('  Агент:     выключен');
+    if (options.agent && options.agent !== 'off' && agent?.reason) {
+      console.warn(`[pin-note] ${agent.reason}`);
+    }
+  }
   console.log('  Остановить: Ctrl+C');
   console.log('');
 

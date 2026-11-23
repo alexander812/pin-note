@@ -2,10 +2,13 @@ import { createHash } from 'node:crypto';
 import { createReadStream, watch } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeBasePath } from './base-path.mjs';
+import { buildReworkPrompt, buildTaskPrompt, resolveAgentConfig } from './agent.mjs';
+import { AgentRunner } from './agent-runner.mjs';
 import { createProxy } from './proxy.mjs';
+import { isOpenStatus } from './shared.mjs';
 import { ReviewStore } from './store.mjs';
 
 const VERSION = '0.1.0';
@@ -13,6 +16,7 @@ const CLIENT_DIR = dirname(fileURLToPath(import.meta.url));
 const API_PREFIX = '/__review/';
 const MAX_BODY = 512 * 1024;
 const MAX_SCREENSHOT = 12 * 1024 * 1024;
+const MAX_ATTACHMENT = 32 * 1024 * 1024;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 const MIME_TYPES = new Map([
@@ -155,14 +159,14 @@ function readJson(request) {
   });
 }
 
-function readBinary(request, limit) {
+function readBinary(request, limit, label = 'Файл') {
   return new Promise((resolvePromise, reject) => {
     let size = 0;
     const chunks = [];
     request.on('data', (chunk) => {
       size += chunk.length;
       if (size > limit) {
-        reject(Object.assign(new Error('Скриншот слишком большой'), { status: 413 }));
+        reject(Object.assign(new Error(`${label} слишком большой`), { status: 413 }));
         request.destroy();
         return;
       }
@@ -194,6 +198,29 @@ function screenshotExtension(buffer, contentType) {
     return 'webp';
   }
   return null;
+}
+
+function safeDownloadName(value) {
+  const name = String(value || '')
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, '_')
+    .trim()
+    .slice(0, 240);
+  return name || 'file';
+}
+
+function contentDisposition(name, inline = false) {
+  const safe = safeDownloadName(name);
+  const fallback = safe.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(safe).replace(/['()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `${inline ? 'inline' : 'attachment'}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
+function isInlineImage(name) {
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif'].includes(
+    extname(String(name || '')).toLowerCase()
+  );
 }
 
 function assertSameOrigin(request) {
@@ -245,6 +272,9 @@ export async function createReviewServer(options = {}) {
   const proxy = options.target ? createProxy({ target: options.target, injectClient }) : null;
   const store = new ReviewStore({ root, dataDir, sourceRoot });
   await store.init();
+  const agentConfig = options.agent
+    ? await resolveAgentConfig({ options: options.agent, dataDir, root })
+    : null;
 
   const clients = new Set();
   let watchHandle = null;
@@ -265,6 +295,91 @@ export async function createReviewServer(options = {}) {
       }
     }
   };
+
+  const agentBatch = { queue: [], current: null };
+
+  const agentRunner = agentConfig
+    ? new AgentRunner({
+        root,
+        store,
+        config: agentConfig,
+        onEvent: (payload) => {
+          broadcast('agent', payload);
+          if (
+            agentBatch.current &&
+            payload.taskId === agentBatch.current &&
+            ['completed', 'error', 'cancelled', 'idle'].includes(payload.status)
+          ) {
+            agentBatch.current = null;
+            startNextAgentBatchTask().catch((err) => {
+              console.error(`[pin-note] пакетный запуск агента: ${err.message}`);
+            });
+          }
+        },
+      })
+    : null;
+
+  function clearAgentBatch() {
+    agentBatch.queue = [];
+    agentBatch.current = null;
+  }
+
+  function agentBatchEligible(state) {
+    return [...state.tasks]
+      .filter((task) => task.status !== 'closed')
+      .filter((task) => {
+        const comments = state.comments.filter((comment) => comment.taskId === task.id);
+        return comments.some((comment) => isOpenStatus(comment.status));
+      })
+      .sort((left, right) => left.number - right.number);
+  }
+
+  async function startNextAgentBatchTask() {
+    if (!agentRunner?.enabled || closed) return;
+    if (agentBatch.current) return;
+    while (agentBatch.queue.length > 0) {
+      const taskId = agentBatch.queue.shift();
+      let state;
+      try {
+        state = await store.read();
+      } catch (err) {
+        console.error(`[pin-note] пакетный запуск агента: ${err.message}`);
+        break;
+      }
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (!task || task.status === 'closed') continue;
+      const comments = state.comments.filter((comment) => comment.taskId === task.id);
+      if (!comments.some((comment) => isOpenStatus(comment.status))) continue;
+      const mode = comments.some((comment) => comment.status === 'rejected') ? 'rework' : 'task';
+      const providerLabel = agentRunner.publicConfig().label;
+      const prompt =
+        mode === 'rework'
+          ? buildReworkPrompt({
+              task,
+              comments,
+              project: root,
+              dataDir: store.dataDir,
+              providerLabel,
+            })
+          : buildTaskPrompt({
+              task,
+              comments,
+              project: root,
+              dataDir: store.dataDir,
+              providerLabel,
+            });
+      agentBatch.current = task.id;
+      try {
+        agentRunner.dispatch(task, { prompt, mode, replaceQueued: mode === 'rework' });
+      } catch (err) {
+        agentBatch.current = null;
+        console.error(`[pin-note] пакетный запуск агента: ${err.message}`);
+        continue;
+      }
+      return;
+    }
+    agentBatch.current = null;
+  }
 
   const notifyReload = debounce(() => {
     broadcast('reload', { at: Date.now() });
@@ -507,12 +622,24 @@ export async function createReviewServer(options = {}) {
         feedbackFile: relative(root, store.feedbackFile),
         instructionsFile: relative(root, store.instructionsFile),
         screenshotsDir: relative(root, store.screenshotsDir),
+        attachmentsDir: relative(root, store.attachmentsDir),
         activeTask: await store.currentTask(),
+        agent: agentRunner
+          ? agentRunner.publicConfig()
+          : {
+              enabled: false,
+              provider: 'off',
+              label: 'AI-агент',
+              reason: 'Агент не настроен для этого запуска PinNote.',
+            },
         capabilities: {
           sourceHints: true,
           screenshots: true,
           canvasArea: false,
           maxScreenshotBytes: MAX_SCREENSHOT,
+          attachments: true,
+          maxAttachmentBytes: MAX_ATTACHMENT,
+          maxAttachments: 10,
         },
       });
       return;
@@ -531,15 +658,189 @@ export async function createReviewServer(options = {}) {
       return;
     }
 
-    const taskActionRoute = /^tasks\/([^/]+)\/(submit|close)$/.exec(route);
+    if (method === 'POST' && route === 'tasks') {
+      assertSameOrigin(request);
+      requireJson(request);
+      const body = await readJson(request);
+      const task = await store.createTask({ description: body.description });
+      notifyComments();
+      sendJson(response, 201, { task });
+      return;
+    }
+
+    if (method === 'GET' && route === 'agent') {
+      sendJson(response, 200, {
+        config: agentRunner
+          ? agentRunner.publicConfig()
+          : {
+              enabled: false,
+              provider: 'off',
+              label: 'AI-агент',
+              reason: 'Агент не настроен для этого запуска PinNote.',
+            },
+        tasks: agentRunner ? agentRunner.list() : [],
+      });
+      return;
+    }
+
+    if (method === 'POST' && route === 'agent/dispatch') {
+      assertSameOrigin(request);
+      requireJson(request);
+      const body = await readJson(request);
+      if (!agentRunner?.enabled) {
+        sendJson(response, 409, {
+          error: agentRunner?.publicConfig().reason || 'Агент не настроен',
+        });
+        return;
+      }
+      const busy = agentRunner
+        .list()
+        .some((item) => item.status === 'running' || item.status === 'queued');
+      if (busy || agentBatch.current || agentBatch.queue.length > 0) {
+        sendJson(response, 409, {
+          error: 'Агент уже работает — дождитесь завершения или остановите его',
+        });
+        return;
+      }
+      const state = await store.read();
+      const eligible = agentBatchEligible(state);
+      if (eligible.length === 0) {
+        sendJson(response, 409, { error: 'Нет задач с правками в работе' });
+        return;
+      }
+      const preferredId = String(body.taskId || '').trim();
+      const ordered = [...eligible];
+      const preferredIndex = preferredId
+        ? ordered.findIndex((task) => task.id === preferredId)
+        : -1;
+      if (preferredIndex > 0) ordered.unshift(ordered.splice(preferredIndex, 1)[0]);
+      agentBatch.queue = ordered.map((task) => task.id);
+      agentBatch.current = null;
+      await startNextAgentBatchTask();
+      sendJson(response, 200, {
+        queued: ordered.length,
+        tasks: ordered.map((task) => ({ id: task.id, number: task.number })),
+        agent: agentBatch.current ? agentRunner.snapshot(agentBatch.current) : null,
+      });
+      return;
+    }
+
+    const taskActionRoute = /^tasks\/([^/]+)\/(submit|close|accept)$/.exec(route);
     if (taskActionRoute && method === 'POST') {
       assertSameOrigin(request);
       const taskRef = decodeURIComponent(taskActionRoute[1]);
       const action = taskActionRoute[2];
-      const task = action === 'submit' ? await store.submitTask(taskRef) : await store.closeTask(taskRef);
+      const task =
+        action === 'submit'
+          ? await store.submitTask(taskRef)
+          : action === 'accept'
+            ? await store.acceptTask(taskRef)
+            : await store.closeTask(taskRef);
+      if (action !== 'submit' && agentRunner) agentRunner.cancel(task.id);
       notifyComments();
       sendJson(response, 200, { task });
       return;
+    }
+
+    const agentCancelRoute = /^tasks\/([^/]+)\/agent\/cancel$/.exec(route);
+    if (agentCancelRoute && method === 'POST') {
+      assertSameOrigin(request);
+      const taskRef = decodeURIComponent(agentCancelRoute[1]);
+      const task = await store.getTask(taskRef);
+      if (!task) {
+        sendJson(response, 404, { error: 'Задача не найдена' });
+        return;
+      }
+      if (!agentRunner?.enabled) {
+        sendJson(response, 409, { error: agentRunner?.publicConfig().reason || 'Агент не настроен' });
+        return;
+      }
+      clearAgentBatch();
+      sendJson(response, 200, { agent: agentRunner.cancel(task.id) });
+      return;
+    }
+
+    const agentRoute = /^tasks\/([^/]+)\/agent$/.exec(route);
+    if (agentRoute) {
+      const taskRef = decodeURIComponent(agentRoute[1]);
+      const task = await store.getTask(taskRef);
+      if (!task) {
+        sendJson(response, 404, { error: 'Задача не найдена' });
+        return;
+      }
+      if (method === 'GET') {
+        sendJson(response, 200, {
+          agent: agentRunner
+            ? agentRunner.snapshot(task.id, { includeLog: true })
+            : {
+                taskId: task.id,
+                status: 'idle',
+                sessionId: null,
+                queued: 0,
+                error: null,
+              },
+          config: agentRunner
+            ? agentRunner.publicConfig()
+            : { enabled: false, provider: 'off', reason: 'Агент не настроен' },
+        });
+        return;
+      }
+      if (!agentRunner?.enabled) {
+        sendJson(response, 409, {
+          error: agentRunner?.publicConfig().reason || 'Агент не настроен',
+        });
+        return;
+      }
+      if (method === 'DELETE') {
+        assertSameOrigin(request);
+        sendJson(response, 200, { agent: await agentRunner.reset(task.id) });
+        return;
+      }
+      if (method === 'POST') {
+        assertSameOrigin(request);
+        requireJson(request);
+        const body = await readJson(request);
+        if (task.status === 'closed') {
+          sendJson(response, 409, { error: 'Задача уже закрыта' });
+          return;
+        }
+        const state = await store.read();
+        const comments = state.comments.filter((comment) => comment.taskId === task.id);
+        if (comments.length === 0) {
+          sendJson(response, 400, { error: 'В задаче нет комментариев' });
+          return;
+        }
+        const mode = body.mode === 'rework' ? 'rework' : 'task';
+        if (mode === 'rework' && !comments.some((comment) => comment.status === 'rejected')) {
+          sendJson(response, 400, { error: 'В задаче нет отклонённых комментариев' });
+          return;
+        }
+        const providerLabel = agentRunner.publicConfig().label;
+        const prompt =
+          mode === 'rework'
+            ? buildReworkPrompt({
+                task,
+                comments,
+                project: root,
+                dataDir: store.dataDir,
+                providerLabel,
+              })
+            : buildTaskPrompt({
+                task,
+                comments,
+                project: root,
+                dataDir: store.dataDir,
+                providerLabel,
+              });
+        const agent = agentRunner.dispatch(task, {
+          prompt,
+          mode,
+          commentId: body.commentId || null,
+          replaceQueued: mode === 'rework',
+        });
+        sendJson(response, 200, { agent });
+        return;
+      }
     }
 
     const taskRoute = /^tasks\/([^/]+)$/.exec(route);
@@ -570,6 +871,7 @@ export async function createReviewServer(options = {}) {
       if (method === 'DELETE') {
         assertSameOrigin(request);
         const result = await store.removeTask(taskRef);
+        if (agentRunner) agentRunner.cancel(result.task.id);
         notifyComments();
         sendJson(response, 200, result);
         return;
@@ -579,7 +881,7 @@ export async function createReviewServer(options = {}) {
     if (method === 'POST' && route === 'screenshots') {
       assertSameOrigin(request);
       const contentType = String(request.headers['content-type'] || '');
-      const buffer = await readBinary(request, MAX_SCREENSHOT);
+      const buffer = await readBinary(request, MAX_SCREENSHOT, 'Скриншот');
       const extension = screenshotExtension(buffer, contentType);
       if (!buffer.length || !extension) {
         sendJson(response, 415, { error: 'Ожидался PNG, JPEG или WebP' });
@@ -629,6 +931,60 @@ export async function createReviewServer(options = {}) {
       return;
     }
 
+    if (method === 'POST' && route === 'attachments') {
+      assertSameOrigin(request);
+      const buffer = await readBinary(request, MAX_ATTACHMENT, 'Файл');
+      if (!buffer.length) {
+        sendJson(response, 400, { error: 'Пустой файл' });
+        return;
+      }
+      const name = searchParams.get('name') || 'file';
+      const type = searchParams.get('type') || request.headers['content-type'] || '';
+      const attachment = await store.saveAttachment(buffer, { name, type, size: buffer.length });
+      sendJson(response, 201, { attachment });
+      return;
+    }
+
+    if ((method === 'GET' || method === 'HEAD') && route.startsWith('attachments/')) {
+      let name;
+      try {
+        name = decodeURIComponent(route.slice('attachments/'.length));
+      } catch {
+        sendText(response, 400, 'Bad Request');
+        return;
+      }
+      const filePath = store.resolveAttachment(name);
+      if (!filePath) {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      let info;
+      try {
+        info = await stat(filePath);
+      } catch {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      if (!info.isFile()) {
+        sendText(response, 404, 'Not Found');
+        return;
+      }
+      const downloadName = searchParams.get('name') || basename(name);
+      response.writeHead(200, {
+        'Content-Type': store.attachmentContentType(name),
+        'Content-Length': info.size,
+        'Content-Disposition': contentDisposition(downloadName, isInlineImage(name)),
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, max-age=3600',
+      });
+      if (method === 'HEAD') {
+        response.end();
+        return;
+      }
+      createReadStream(filePath).pipe(response);
+      return;
+    }
+
     if (method === 'GET' && route === 'comments') {
       sendJson(response, 200, await store.read());
       return;
@@ -664,6 +1020,56 @@ export async function createReviewServer(options = {}) {
       return;
     }
 
+    const replyRoute = /^comments\/([^/]+)\/messages$/.exec(route);
+    if (replyRoute && method === 'POST') {
+      assertSameOrigin(request);
+      requireJson(request);
+      const body = await readJson(request);
+      if (body.dispatchAgent && !agentRunner?.enabled) {
+        sendJson(response, 409, {
+          error: agentRunner?.publicConfig().reason || 'Агент не настроен',
+        });
+        return;
+      }
+      const id = decodeURIComponent(replyRoute[1]);
+      const result = await store.reply(id, body.text ?? body.message);
+      let agent = null;
+      if (body.dispatchAgent && agentRunner?.enabled) {
+        const state = await store.read();
+        const task = state.tasks.find((item) => item.id === result.comment.taskId);
+        if (task && task.status !== 'closed') {
+          const comments = state.comments.filter((item) => item.taskId === task.id);
+          const providerLabel = agentRunner.publicConfig().label;
+          const mode = comments.some((item) => item.status === 'rejected') ? 'rework' : 'task';
+          const prompt =
+            mode === 'rework'
+              ? buildReworkPrompt({
+                  task,
+                  comments,
+                  project: root,
+                  dataDir: store.dataDir,
+                  providerLabel,
+                })
+              : buildTaskPrompt({
+                  task,
+                  comments,
+                  project: root,
+                  dataDir: store.dataDir,
+                  providerLabel,
+                });
+          agent = agentRunner.dispatch(task, {
+            prompt,
+            mode,
+            commentId: result.comment.id,
+            replaceQueued: mode === 'rework',
+          });
+        }
+      }
+      notifyComments();
+      sendJson(response, 200, { ...result, agent });
+      return;
+    }
+
     const reopenRoute = /^comments\/([^/]+)\/reopen$/.exec(route);
     if (reopenRoute && method === 'POST') {
       assertSameOrigin(request);
@@ -682,8 +1088,35 @@ export async function createReviewServer(options = {}) {
         requireJson(request);
         const body = await readJson(request);
         const comment = await store.update(id, body);
+        let agent = null;
+        const agentConfigPublic = agentRunner?.publicConfig();
+        if (
+          comment.status === 'rejected' &&
+          agentRunner?.enabled &&
+          agentConfigPublic?.autoRework &&
+          body.dispatchAgent !== false
+        ) {
+          const state = await store.read();
+          const task = state.tasks.find((item) => item.id === comment.taskId);
+          if (task && task.status !== 'closed') {
+            const comments = state.comments.filter((item) => item.taskId === task.id);
+            const prompt = buildReworkPrompt({
+              task,
+              comments,
+              project: root,
+              dataDir: store.dataDir,
+              providerLabel: agentConfigPublic.label,
+            });
+            agent = agentRunner.dispatch(task, {
+              prompt,
+              mode: 'rework',
+              commentId: comment.id,
+              replaceQueued: true,
+            });
+          }
+        }
         notifyComments();
-        sendJson(response, 200, { comment });
+        sendJson(response, 200, { comment, agent });
         return;
       }
       if (method === 'DELETE') {
@@ -781,9 +1214,11 @@ export async function createReviewServer(options = {}) {
   const close = async () => {
     if (closed) return;
     closed = true;
+    clearAgentBatch();
     notifyReload.cancel();
     notifyComments.cancel();
     stopWatching();
+    if (agentRunner) await agentRunner.close();
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
@@ -829,6 +1264,7 @@ export async function createReviewServer(options = {}) {
     listen,
     close,
     broadcast,
+    agent: agentRunner,
     basePath,
     target: proxy?.target?.href || null,
     get url() {

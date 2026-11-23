@@ -1,7 +1,10 @@
-export const STATUSES = ['open', 'resolved', 'wontfix', 'orphaned'];
+export const STATUSES = ['open', 'review', 'approved', 'rejected', 'resolved', 'wontfix', 'orphaned'];
 
 export const STATUS_LABELS = {
   open: 'Открыт',
+  review: 'На проверке',
+  approved: 'Проверен',
+  rejected: 'Отклонён',
   resolved: 'Решён',
   wontfix: 'Не правим',
   orphaned: 'Не найден',
@@ -9,10 +12,15 @@ export const STATUS_LABELS = {
 
 export const STATUS_ORDER = {
   open: 0,
-  orphaned: 1,
-  resolved: 2,
-  wontfix: 3,
+  rejected: 1,
+  orphaned: 2,
+  review: 3,
+  approved: 4,
+  resolved: 5,
+  wontfix: 6,
 };
+
+export const BLOCKING_STATUSES = ['open', 'orphaned', 'rejected'];
 
 export const TASK_STATUSES = ['active', 'review', 'closed'];
 
@@ -31,7 +39,11 @@ export function taskStatusLabel(status) {
 }
 
 export function isOpenStatus(status) {
-  return status === 'open' || status === 'orphaned';
+  return BLOCKING_STATUSES.includes(status);
+}
+
+export function isReviewableStatus(status) {
+  return status === 'review' || status === 'approved' || status === 'rejected';
 }
 
 export function taskTag(task) {
@@ -115,6 +127,61 @@ function whereLine(anchor) {
   return parts.join('; ');
 }
 
+function formatBytes(value) {
+  const size = Number(value);
+  if (!Number.isFinite(size) || size <= 0) return '';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+  let amount = size;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  const rounded = amount >= 10 || index === 0 ? Math.round(amount) : Math.round(amount * 10) / 10;
+  return `${rounded} ${units[index]}`;
+}
+
+function markdownLinkText(value) {
+  return String(value ?? '').replace(/([\\[\]])/g, '\\$1');
+}
+
+function attachmentLines(attachments) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return [];
+  const lines = ['', '**Файлы:**'];
+  for (const attachment of attachments) {
+    if (!attachment?.file) continue;
+    const name = String(attachment.name || attachment.file);
+    const details = [attachment.type, formatBytes(attachment.size)].filter(Boolean).join(', ');
+    lines.push(
+      `- [${markdownLinkText(name)}](${encodeURI(attachment.file)})` +
+        (details ? ` — ${details}` : '')
+    );
+    if (
+      String(attachment.type || '').startsWith('image/') ||
+      /\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(String(attachment.name || attachment.file))
+    ) {
+      lines.push('', `![${markdownLinkText(name)}](${encodeURI(attachment.file)})`);
+    }
+  }
+  return lines;
+}
+
+function threadLines(thread) {
+  if (!Array.isArray(thread) || thread.length === 0) return [];
+  const lines = ['', '**Диалог:**'];
+  for (const message of thread) {
+    const textValue = String(message?.text || '').trim();
+    if (!textValue) continue;
+    const author =
+      message.role === 'agent' ? 'Агент' : message.role === 'system' ? 'Система' : 'Заказчик';
+    const at = message.at ? ` · ${message.at}` : '';
+    lines.push('', `**${author}${at}:**`, '');
+    for (const line of textValue.split('\n')) lines.push(`> ${line}`);
+    lines.push(...attachmentLines(message.attachments));
+  }
+  return lines;
+}
+
 function field(label, value) {
   const text = String(value ?? '').trim();
   if (!text) return [`**${label}:** —`];
@@ -143,9 +210,16 @@ export function formatCommentMarkdown(comment, index = 0) {
   const title = `${index ? `${index}. ` : ''}${inlineCode(id)} · ${status}`;
   lines.push(`### ${title}`, '');
   lines.push(...field('Комментарий', comment?.comment));
-  if (comment?.resolution) {
+  lines.push(...attachmentLines(comment?.attachments));
+  const thread = Array.isArray(comment?.thread) ? comment.thread : [];
+  const threadHasResolution = thread.some((message) => message?.kind === 'resolution');
+  if (comment?.rejection?.reason) {
+    lines.push('', ...field('Причина отклонения', comment.rejection.reason));
+  }
+  if (comment?.resolution && !threadHasResolution) {
     lines.push('', ...field('Решение', comment.resolution));
   }
+  lines.push(...threadLines(thread));
   const elementText = oneLine(anchor.text, 120);
   const element = [anchor.tag ? inlineCode(anchor.tag) : '', elementText ? `«${elementText}»` : '']
     .filter(Boolean)
@@ -181,10 +255,14 @@ export function formatCommentMarkdown(comment, index = 0) {
 
 export function formatAllMarkdown(comments, meta = {}) {
   const list = Array.isArray(comments) ? comments : [];
-  const open = list.filter((comment) => comment.status === 'open');
-  const orphaned = list.filter((comment) => comment.status === 'orphaned');
-  const resolved = list.filter((comment) => comment.status === 'resolved');
-  const wontfix = list.filter((comment) => comment.status === 'wontfix');
+  const byStatus = (status) => list.filter((comment) => comment.status === status);
+  const open = byStatus('open');
+  const review = byStatus('review');
+  const approved = byStatus('approved');
+  const rejected = byStatus('rejected');
+  const resolved = byStatus('resolved');
+  const orphaned = byStatus('orphaned');
+  const wontfix = byStatus('wontfix');
   const project = meta.project || 'website';
   const updatedAt = meta.updatedAt || new Date().toISOString();
   const task = meta.task || null;
@@ -201,21 +279,27 @@ export function formatAllMarkdown(comments, meta = {}) {
   }
   sections.push(`- Обновлено: ${updatedAt}`);
   sections.push(
-    `- Всего: ${list.length} · открытых: ${open.length} · не найдено: ${orphaned.length} · ` +
-      `решённых: ${resolved.length} · не правим: ${wontfix.length}`
+    `- Всего: ${list.length} · открытых: ${open.length} · на проверке: ${review.length} · ` +
+      `проверено: ${approved.length} · отклонено: ${rejected.length} · решённых: ${resolved.length} · ` +
+      `не найдено: ${orphaned.length} · не правим: ${wontfix.length}`
   );
   sections.push('');
   sections.push(
-    'Инструкция для агента: разбери открытые комментарии, найди исходники по селектору, тексту, ' +
-      'HTML и подсказкам, внеси минимальные правки. После проверки обнови `status` и `resolution`. ' +
-      'Когда все комментарии задачи разобраны, выполни `pin-note tasks submit`. Не закрывай задачу ' +
-      'самостоятельно и не удаляй комментарии.'
+    'Инструкция для агента: разбери открытые и отклонённые комментарии. У отклонённых в поле ' +
+      '«Причина отклонения» указано, что нужно доделать. Найди исходники по селектору, тексту, HTML ' +
+      'и подсказкам, внеси минимальные правки. После правок переведи комментарий в «На проверке»: ' +
+      '`pin-note comments resolve <id> --resolution "..."`. Когда все комментарии разобраны, выполни ' +
+      '`pin-note tasks submit`. Не закрывай задачу самостоятельно: при закрытии человеком все ' +
+      'комментарии задачи получают статус «Решён». Не удаляй комментарии.'
   );
 
   const blocks = [
     ['Открытые', open],
-    ['Не найдены', orphaned],
+    ['Отклонённые', rejected],
+    ['На проверке', review],
+    ['Проверенные', approved],
     ['Решённые', resolved],
+    ['Не найдены', orphaned],
     ['Не правим', wontfix],
   ];
 
