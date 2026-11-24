@@ -1012,7 +1012,10 @@ export async function createReviewServer(options = {}) {
       return;
     }
 
-    if (method === 'GET' && (route === 'client.js' || route === 'shared.js' || route === 'client.css')) {
+    if (
+      method === 'GET' &&
+      (route === 'client.js' || route === 'shared.js' || route === 'i18n.js' || route === 'client.css')
+    ) {
       const fileName = route === 'shared.js' ? 'shared.mjs' : route;
       await sendAsset(response, join(CLIENT_DIR, fileName));
       return;

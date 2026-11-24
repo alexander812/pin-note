@@ -1,4 +1,14 @@
 import { formatAllMarkdown, isOpenStatus, STATUSES, taskTitle } from './shared.js';
+import {
+  createTranslator,
+  detectBrowserLocale,
+  localeTag,
+  normalizeLocale,
+  pluralForm,
+  readStoredLocale,
+  storeLocale,
+  translateServerMessage,
+} from './i18n.js';
 
 const API = '/__review';
 const HOST_ID = 'pin-note-root';
@@ -20,14 +30,18 @@ const STATIC_HTML = `
   <header class="pn-bar" data-role="bar" aria-label="Панель PinNote">
     <span class="pn-brand"><span class="pn-brand-mark" aria-hidden="true">◈</span>PINNOTE</span>
     <span class="pn-bar-sep" aria-hidden="true"></span>
+    <button type="button" class="pn-current-task" data-action="open-current" data-role="current-task" title="Текущая задача">НОВАЯ ЗАДАЧА</button>
     <button type="button" class="pn-mode-btn" data-action="mode" aria-pressed="false" aria-label="Комментировать" title="Комментировать · Esc — выйти">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 9.9 9.9 0 0 1-4.2-.9L3 20.8l1.6-4.9A8.5 8.5 0 1 1 21 11.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
       </svg>
     </button>
-    <button type="button" class="pn-current-task" data-action="open-current" data-role="current-task" title="Текущая задача">НОВАЯ ЗАДАЧА</button>
     <span class="pn-bar-hint" data-role="hint"></span>
     <span class="pn-bar-spacer"></span>
+    <div class="pn-lang" data-role="lang" role="group" aria-label="Язык интерфейса">
+      <button type="button" data-action="language" data-id="ru" aria-pressed="false" title="Русский" aria-label="Русский">RU</button>
+      <button type="button" data-action="language" data-id="en" aria-pressed="false" title="English" aria-label="English">EN</button>
+    </div>
     <button type="button" class="pn-reload" data-action="reload-site" data-role="reload-site" hidden title="Сайт обновился. Перезагрузить страницу">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -40,7 +54,7 @@ const STATIC_HTML = `
         <path d="M7 20h10M12 16V5M7 10l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
-    <button type="button" class="pn-compose-action" data-action="compose-selection" data-role="compose-action" hidden aria-label="Написать комментарий" title="Написать комментарий">
+    <button type="button" class="pn-compose-action" data-action="compose-selection" data-role="compose-action" hidden disabled aria-label="Написать комментарий" title="Написать комментарий">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
         <path d="m14 7 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
@@ -205,7 +219,7 @@ const STATIC_HTML = `
     </div>
     <textarea data-role="comment-input" rows="5" placeholder="Что изменить? Например: сделай заголовок крупнее и добавь отступ…"></textarea>
     <div class="pn-popover-foot">
-      <span class="pn-hint">⌘↵ — сохранить<br>Alt/Option+клик — выше по дереву</span>
+      <span class="pn-hint"><span data-role="hint-save">⌘↵ — сохранить</span><br><span data-role="hint-up">Alt/Option+клик — выше по дереву</span></span>
       <div class="pn-popover-actions">
         <button type="button" class="pn-btn pn-btn-ghost" data-action="cancel">Отмена</button>
         <button type="button" class="pn-btn pn-btn-primary" data-action="save" disabled>Сохранить</button>
@@ -238,6 +252,84 @@ const STATIC_HTML = `
   </div>
 `;
 
+const STATIC_I18N = [
+  ['[data-role="bar"]', 'attr:aria-label', 'Панель PinNote'],
+  ['[data-action="mode"]', 'attr:aria-label', 'Комментировать'],
+  ['[data-action="mode"]', 'attr:title', 'Комментировать · Esc — выйти'],
+  ['[data-role="current-task"]', 'text', 'НОВАЯ ЗАДАЧА'],
+  ['[data-role="current-task"]', 'attr:title', 'Текущая задача'],
+  ['[data-role="reload-site"]', 'attr:title', 'Сайт обновился. Перезагрузить страницу'],
+  ['[data-role="reload-site"] span', 'text', 'Обновить сайт'],
+  ['[data-action="select-parent"]', 'attr:aria-label', 'Выбрать родительский элемент'],
+  ['[data-action="select-parent"]', 'attr:title', 'Выбрать родительский элемент'],
+  ['[data-action="compose-selection"]', 'attr:aria-label', 'Написать комментарий'],
+  ['[data-action="compose-selection"]', 'attr:title', 'Написать комментарий'],
+  ['[data-action="panel"]', 'attr:title', 'Открыть панель'],
+  ['[data-role="toggle-label"]', 'text', 'Открыть'],
+  ['.pn-scrim', 'attr:aria-label', 'Закрыть панель'],
+  ['[data-role="panel"]', 'attr:aria-label', 'Задачи PinNote'],
+  ['[data-role="list-screen"]', 'attr:aria-label', 'Все задачи'],
+  ['.pn-list-title', 'text', 'Задачи'],
+  ['.pn-refresh', 'attr:aria-label', 'Обновить'],
+  ['.pn-refresh', 'attr:title', 'Обновить'],
+  ['.pn-segmented', 'attr:aria-label', 'Фильтр задач'],
+  ['[data-filter="active"]', 'text', 'Активные'],
+  ['[data-filter="closed"]', 'text', 'Закрытые'],
+  ['[data-filter="all"]', 'text', 'Все'],
+  ['.pn-add-task-label', 'text', 'Добавить задачу'],
+  ['[data-role="detail-screen"]', 'attr:aria-label', 'Подробности задачи'],
+  ['.pn-back span', 'text', 'К задачам'],
+  ['[data-role="task-menu-button"]', 'attr:aria-label', 'Действия с задачей'],
+  ['[data-role="task-menu-button"]', 'attr:title', 'Действия с задачей'],
+  ['[data-role="menu-dispatch"]', 'text', 'Отправить агенту'],
+  ['[data-role="menu-cancel"]', 'text', 'Остановить агента'],
+  ['[data-role="menu-reset"]', 'text', 'Сбросить сессию агента'],
+  ['[data-action="copy-all"]', 'text', 'Скопировать задание'],
+  ['[data-role="menu-close"]', 'text', 'Закрыть задачу'],
+  ['[data-role="menu-delete"]', 'text', 'Удалить задачу'],
+  ['[data-role="task-title"]', 'text', 'Задача'],
+  ['.pn-progress-label > span:first-child', 'text', 'Принято правок'],
+  ['[data-role="accepted-count"]', 'text', '0 из 0'],
+  ['[data-role="progress"]', 'attr:aria-label', 'Принятые правки'],
+  ['[data-role="accept-task"]', 'text', 'Принять'],
+  ['[data-role="confirm-button"]', 'text', 'Подтвердить'],
+  ['.pn-confirm-actions [data-action="cancel-confirm"]', 'text', 'Отмена'],
+  ['.pn-fixes', 'attr:aria-label', 'Список правок'],
+  ['.pn-section-label > span:first-child', 'text', 'Правки'],
+  ['.pn-thread', 'attr:aria-label', 'Диалог по выбранной правке'],
+  ['.pn-footer .pn-suggestions', 'attr:aria-label', 'Действия по выбранной правке'],
+  ['[data-role="accept-label"]', 'text', 'Принять правку'],
+  ['[data-role="reply-button"] span', 'text', 'Ответить'],
+  ['[data-role="stop-fix-button"] span', 'text', 'Остановить агента'],
+  ['[data-role="reply-input"]', 'attr:placeholder', 'Что уточнить или доделать?'],
+  ['[data-role="reply-input"]', 'attr:aria-label', 'Реплика по выбранной правке'],
+  ['[data-role="send-reply"]', 'attr:aria-label', 'Отправить реплику'],
+  ['[data-role="send-reply"]', 'attr:title', 'Отправить · ⌘ / Ctrl ↵'],
+  ['.pn-cancel-reply', 'text', 'Отмена'],
+  ['[data-role="task-action-label"]', 'text', 'Отправить всё агенту'],
+  ['[data-role="popover"]', 'attr:aria-label', 'Новый комментарий'],
+  ['.pn-popover-head [data-action="cancel"]', 'attr:aria-label', 'Закрыть'],
+  ['[data-action="capture-screenshot"]', 'text', 'Скриншот элемента'],
+  ['[data-action="pick-files"]', 'text', 'Загрузить файл'],
+  ['[data-action="pick-files"]', 'attr:title', 'Прикрепить картинку или другой файл'],
+  ['[data-role="shot-preview-img"]', 'attr:alt', 'Прикреплённый скриншот'],
+  ['.pn-shot-remove', 'attr:aria-label', 'Убрать скриншот'],
+  ['[data-role="comment-input"]', 'attr:placeholder', 'Что изменить? Например: сделай заголовок крупнее и добавь отступ…'],
+  ['[data-role="hint-save"]', 'text', '⌘↵ — сохранить'],
+  ['[data-role="hint-up"]', 'text', 'Alt/Option+клик — выше по дереву'],
+  ['.pn-popover-actions [data-action="cancel"]', 'text', 'Отмена'],
+  ['[data-action="save"]', 'text', 'Сохранить'],
+  ['.pn-annotator-card', 'attr:aria-label', 'Аннотация скриншота'],
+  ['.pn-annotator-head strong', 'text', 'Нарисуй пометки на изображении'],
+  ['.pn-annotator [data-action="close-annotator"]', 'attr:aria-label', 'Закрыть'],
+  ['[data-role="annotator-colors"]', 'attr:aria-label', 'Цвет линии'],
+  ['[data-action="annotator-undo"]', 'text', 'Отменить'],
+  ['[data-action="annotator-clear"]', 'text', 'Очистить'],
+  ['[data-action="annotator-cancel"]', 'text', 'Отмена'],
+  ['[data-action="annotator-attach"]', 'text', 'Прикрепить'],
+  ['[data-role="lang"]', 'attr:aria-label', 'Язык интерфейса'],
+];
+
 class ApiError extends Error {
   constructor(message, status, details = null) {
     super(message);
@@ -255,7 +347,17 @@ class ReviewClient {
     this.refs = {};
     this.pinElements = new Map();
     if (!this.app) throw new Error('Review UI root was not found');
+    let storage = null;
+    try {
+      storage = globalThis.localStorage || null;
+    } catch {
+      storage = null;
+    }
+    const initialLocale =
+      readStoredLocale(storage) || detectBrowserLocale(globalThis.navigator);
+    this.t = createTranslator(initialLocale);
     this.state = {
+      locale: initialLocale,
       comments: [],
       tasks: [],
       activeTaskId: null,
@@ -307,6 +409,9 @@ class ReviewClient {
 
   async boot() {
     this.captureRefs();
+    this.host.lang = this.state.locale;
+    this.applyStaticTranslations();
+    this.updateLanguageButtons();
     this.host.dataset.panel = 'closed';
     this.bindUi();
     this.bindPage();
@@ -316,6 +421,76 @@ class ReviewClient {
     this.renderAll();
     this.startTicker();
     this.notifySiteResize();
+  }
+
+  applyStaticTranslations() {
+    for (const [selector, kind, source] of STATIC_I18N) {
+      const node = this.app.querySelector(selector);
+      if (!node) continue;
+      const value = this.t(source);
+      if (kind === 'text') {
+        node.textContent = value;
+      } else if (kind.startsWith('attr:')) {
+        node.setAttribute(kind.slice(5), value);
+      }
+    }
+  }
+
+  updateLanguageButtons() {
+    for (const button of this.app.querySelectorAll('[data-action="language"]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.id === this.state.locale));
+    }
+  }
+
+  setLanguage(locale) {
+    const next = normalizeLocale(locale);
+    if (!next || next === this.state.locale) return;
+    this.state.locale = next;
+    this.t = createTranslator(next);
+    this.host.lang = next;
+    let storage = null;
+    try {
+      storage = globalThis.localStorage || null;
+    } catch {
+      storage = null;
+    }
+    storeLocale(storage, next);
+    this.applyStaticTranslations();
+    this.updateLanguageButtons();
+    this.state.forceMessagesRender = true;
+    this.renderAll();
+    this.updateReloadNotice();
+    if (this.state.compose) this.renderComposeAttachments();
+    if (this.state.annotator) this.renderAnnotatorColors();
+  }
+
+  updateModeButton() {
+    const label = this.state.mode
+      ? this.t('Остановить комментирование')
+      : this.t('Комментировать');
+    this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
+    this.refs.modeButton.setAttribute('aria-label', label);
+    this.refs.modeButton.title = this.state.mode
+      ? label
+      : this.t('Комментировать · Esc — выйти');
+  }
+
+  taskStatusText(status) {
+    if (status === 'closed') return this.t('Закрыта');
+    if (status === 'review') return this.t('На проверке');
+    return this.t('В работе');
+  }
+
+  taskDescriptionText(task, emptyText = this.t('Без описания')) {
+    const description = String(task?.description || '').trim();
+    if (!description || /^(?:Задача|Task)\s+T-\d+$/i.test(description)) {
+      return emptyText;
+    }
+    return description;
+  }
+
+  agentConfigReason() {
+    return translateServerMessage(this.state.agentConfig?.reason, this.state.locale);
   }
 
   captureRefs() {
@@ -837,7 +1012,7 @@ class ReviewClient {
         this.refs.panel.setAttribute('aria-hidden', 'false');
         this.app.classList.add('has-panel');
         this.refs.panelButton.setAttribute('aria-expanded', 'true');
-        this.refs.toggleLabel.textContent = 'Закрыть';
+        this.refs.toggleLabel.textContent = this.t('Закрыть');
         this.updatePageOffsets();
       }
     }
@@ -972,7 +1147,7 @@ class ReviewClient {
     const text = this.cleanText(anchor.text || '', 34);
     if (text) return text;
     if (anchor.tag) return `<${anchor.tag}>`;
-    return this.cleanText(comment?.comment || 'Правка', 34);
+    return this.cleanText(comment?.comment || this.t('Правка'), 34);
   }
 
   isFixActive(comment) {
@@ -985,7 +1160,7 @@ class ReviewClient {
 
   fixStatusLabel(comment) {
     const status = comment?.status || 'open';
-    return {
+    const labels = {
       open: 'В работе',
       review: 'К проверке',
       approved: 'Принято',
@@ -993,27 +1168,30 @@ class ReviewClient {
       resolved: 'Принято',
       wontfix: 'Не правим',
       orphaned: 'Не найден',
-    }[status] || 'В работе';
+    };
+    return this.t(labels[status] || 'В работе');
   }
 
   fixStateLabel(task, fix) {
     const status = fix?.status || 'open';
-    if (status === 'approved' || status === 'resolved') return 'Принята';
-    if (status === 'wontfix') return 'Решено не править';
-    if (status === 'orphaned') return 'Элемент не найден в текущем DOM';
+    if (status === 'approved' || status === 'resolved') return this.t('Принята');
+    if (status === 'wontfix') return this.t('Решено не править');
+    if (status === 'orphaned') return this.t('Элемент не найден в текущем DOM');
     const agent = this.agentForTask(task?.id);
     const agentBusy = agent?.status === 'running' || agent?.status === 'queued';
     if (agentBusy) {
-      const activity = agent?.activity ? ` — ${agent.activity}` : '';
+      const activity = agent?.activity
+        ? ` — ${translateServerMessage(agent.activity, this.state.locale)}`
+        : '';
       return (
         (agent?.commentId && agent.commentId === fix?.id
-          ? 'Агент работает над этой правкой'
-          : 'Отправлена агенту — агент работает над задачей') + activity
+          ? this.t('Агент работает над этой правкой')
+          : this.t('Отправлена агенту — агент работает над задачей')) + activity
       );
     }
-    if (status === 'review') return 'На проверке — примите правку или ответьте агенту';
-    if (status === 'rejected') return 'Возвращена агенту на доработку';
-    return 'В работе — ожидает агента';
+    if (status === 'review') return this.t('На проверке — примите правку или ответьте агенту');
+    if (status === 'rejected') return this.t('Возвращена агенту на доработку');
+    return this.t('В работе — ожидает агента');
   }
 
   taskAccepted(task) {
@@ -1025,14 +1203,22 @@ class ReviewClient {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    const day = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(date);
-    const time = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(date);
+    const day = new Intl.DateTimeFormat(localeTag(this.state.locale), {
+      day: 'numeric',
+      month: 'long',
+    }).format(date);
+    const time = new Intl.DateTimeFormat(localeTag(this.state.locale), {
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date);
     return `${day}, ${time}`;
   }
 
   taskTag(task) {
     const number = Number(task?.number);
-    return Number.isFinite(number) && number > 0 ? `ЗАДАЧА-${number}` : 'ЗАДАЧА';
+    return Number.isFinite(number) && number > 0
+      ? this.t('ЗАДАЧА-{number}', { number })
+      : this.t('ЗАДАЧА');
   }
 
   openTask(taskId, fixId = null) {
@@ -1056,7 +1242,7 @@ class ReviewClient {
     this.refs.panel.setAttribute('aria-hidden', 'false');
     this.app.classList.add('has-panel');
     this.refs.panelButton.setAttribute('aria-expanded', 'true');
-    this.refs.toggleLabel.textContent = 'Закрыть';
+    this.refs.toggleLabel.textContent = this.t('Закрыть');
     this.updatePageOffsets();
     this.updateScrim();
     this.notifySiteResize();
@@ -1193,7 +1379,7 @@ class ReviewClient {
           : clicked;
       const parent = base.parentElement;
       if (!parent || parent === document.documentElement) {
-        this.toast('Выше уже некуда');
+        this.toast(this.t('Выше уже некуда'));
         return;
       }
       if (mobile && !this.state.compose) this.selectElement(parent, event);
@@ -1379,11 +1565,16 @@ class ReviewClient {
       ...payload,
     };
     if (payload.reset) {
-      this.toast('Сессия агента сброшена');
+      this.toast(this.t('Сессия агента сброшена'));
     } else if (payload.status === 'error' && previous?.status !== 'error') {
-      this.toast(`Агент: ${this.agentErrorMessage(payload.error) || 'ошибка выполнения'}`, 'error');
+      this.toast(
+        this.t('Агент: {error}', {
+          error: this.agentErrorMessage(payload.error) || this.t('ошибка выполнения'),
+        }),
+        'error'
+      );
     } else if (payload.status === 'completed' && previous?.status === 'running') {
-      this.toast('Агент завершил работу — проверьте комментарии');
+      this.toast(this.t('Агент завершил работу — проверьте комментарии'));
     }
     if (
       (payload.status === 'running' || payload.status === 'queued') &&
@@ -1428,7 +1619,9 @@ class ReviewClient {
     if (this.hasUnsavedInput()) {
       if (!wasPending) {
         this.toast(
-          'Сайт обновился. Ввод сохранён — перезагрузка после отправки или по кнопке «Обновить сайт».'
+          this.t(
+            'Сайт обновился. Ввод сохранён — перезагрузка после отправки или по кнопке «Обновить сайт».'
+          )
         );
       }
       return;
@@ -1459,8 +1652,10 @@ class ReviewClient {
     if (pending) {
       const waiting = this.hasUnsavedInput();
       this.refs.reloadSite.title = waiting
-        ? 'Сайт обновился. Текст сохранён — перезагрузите страницу после отправки или нажмите здесь.'
-        : 'Сайт обновился. Перезагрузить страницу';
+        ? this.t(
+            'Сайт обновился. Текст сохранён — перезагрузите страницу после отправки или нажмите здесь.'
+          )
+        : this.t('Сайт обновился. Перезагрузить страницу');
     }
   }
 
@@ -1469,7 +1664,7 @@ class ReviewClient {
     this.state.reloadScheduled = true;
     this.state.pendingReload = false;
     this.updateReloadNotice();
-    this.toast('Сайт обновился, перезагружаю…');
+    this.toast(this.t('Сайт обновился, перезагружаю…'));
     setTimeout(() => {
       if (this.hasUnsavedInput()) {
         // The customer started typing during the short delay: keep the page
@@ -1477,7 +1672,7 @@ class ReviewClient {
         this.state.reloadScheduled = false;
         this.state.pendingReload = true;
         this.updateReloadNotice();
-        this.toast('Сайт обновился. Ввод сохранён — перезагрузка после отправки.', '');
+        this.toast(this.t('Сайт обновился. Ввод сохранён — перезагрузка после отправки.'), '');
         return;
       }
       location.reload();
@@ -1511,7 +1706,9 @@ class ReviewClient {
       let details = null;
       try {
         const data = await response.json();
-        if (data?.error) message = data.error;
+        if (data?.error) {
+          message = translateServerMessage(data.error, this.state.locale);
+        }
         details = data?.details || null;
       } catch {
         // Ignore non-JSON error bodies.
@@ -1556,7 +1753,7 @@ class ReviewClient {
           id: 't_local_1',
           number: 1,
           status: hasWork ? 'active' : 'review',
-          description: description || 'Первая задача',
+          description: description || this.t('Первая задача'),
           createdAt: first.createdAt || new Date().toISOString(),
           updatedAt: null,
           submittedAt: hasWork ? null : first.createdAt || new Date().toISOString(),
@@ -1608,14 +1805,11 @@ class ReviewClient {
   setMode(active) {
     this.state.mode = Boolean(active);
     this.state.selected = null;
-    this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
-    const modeLabel = this.state.mode ? 'Остановить комментирование' : 'Комментировать';
-    this.refs.modeButton.setAttribute('aria-label', modeLabel);
-    this.refs.modeButton.title = modeLabel;
+    this.updateModeButton();
     this.app.classList.toggle('is-commenting', this.state.mode);
     document.documentElement.classList.toggle('pn-comment-mode', this.state.mode);
     this.refs.hint.textContent = this.state.mode
-      ? 'выберите элемент на странице'
+      ? this.t('выберите элемент на странице')
       : this.projectLabel();
     this.renderBar();
     if (!this.state.mode) {
@@ -1630,8 +1824,8 @@ class ReviewClient {
       this.state.hintShown = true;
       this.toast(
         innerWidth <= MOBILE_BREAKPOINT
-          ? 'Кликните по элементу, затем нажмите кнопку с карандашом в баре.'
-          : 'Кликните по элементу. Alt/Option+клик — подняться по дереву.'
+          ? this.t('Кликните по элементу, затем нажмите кнопку с карандашом в баре.')
+          : this.t('Кликните по элементу. Alt/Option+клик — подняться по дереву.')
       );
     }
   }
@@ -1649,8 +1843,10 @@ class ReviewClient {
     this.refs.panel.setAttribute('aria-hidden', String(!this.state.panel));
     this.app.classList.toggle('has-panel', this.state.panel);
     this.refs.panelButton.setAttribute('aria-expanded', String(this.state.panel));
-    this.refs.panelButton.title = this.state.panel ? 'Свернуть панель' : 'Открыть панель';
-    this.refs.toggleLabel.textContent = this.state.panel ? 'Закрыть' : 'Открыть';
+    this.refs.panelButton.title = this.state.panel
+      ? this.t('Свернуть панель')
+      : this.t('Открыть панель');
+    this.refs.toggleLabel.textContent = this.state.panel ? this.t('Закрыть') : this.t('Открыть');
     this.updatePageOffsets();
     this.updateScrim();
     this.notifySiteResize();
@@ -1687,9 +1883,11 @@ class ReviewClient {
     this.scheduleHighlight();
     if (!this.state.pickHintShown) {
       this.state.pickHintShown = true;
-      this.toast('Элемент выбран. Нажмите кнопку с карандашом в баре.');
+      this.toast(this.t('Элемент выбран. Нажмите кнопку с карандашом в баре.'));
     } else {
-      this.announce(`Выбран элемент ${this.describeElement(element)}.`);
+      this.announce(
+        this.t('Выбран элемент {element}.', { element: this.describeElement(element) })
+      );
     }
   }
 
@@ -1709,7 +1907,7 @@ class ReviewClient {
     this.dismissToast();
     if (!selected.element?.isConnected) {
       this.clearSelection();
-      this.toast('Элемент больше не на странице', 'error');
+      this.toast(this.t('Элемент больше не на странице'), 'error');
       return;
     }
     this.state.selected = null;
@@ -1721,12 +1919,12 @@ class ReviewClient {
     if (!selected) return;
     if (!selected.element?.isConnected) {
       this.clearSelection();
-      this.toast('Элемент больше не на странице', 'error');
+      this.toast(this.t('Элемент больше не на странице'), 'error');
       return;
     }
     const parent = selected.element.parentElement;
     if (!parent || parent === document.documentElement) {
-      this.toast('Выше уже некуда');
+      this.toast(this.t('Выше уже некуда'));
       return;
     }
     const point = selected.anchor?.point;
@@ -1826,7 +2024,10 @@ class ReviewClient {
     let tooBig = 0;
     for (const file of files) {
       if (compose.attachments.length >= maxFiles) {
-        this.toast(`Можно прикрепить не больше ${maxFiles} файлов`, 'error');
+        this.toast(
+          this.t('Можно прикрепить не больше {count} файлов', { count: maxFiles }),
+          'error'
+        );
         break;
       }
       if (file.size > maxBytes) {
@@ -1846,11 +2047,18 @@ class ReviewClient {
       added += 1;
     }
     if (tooBig > 0) {
-      this.toast(`Файл больше ${this.formatBytes(maxBytes)} не прикреплён`, 'error');
+      this.toast(
+        this.t('Файл больше {size} не прикреплён', { size: this.formatBytes(maxBytes) }),
+        'error'
+      );
     }
     this.renderComposeAttachments();
     if (added > 0) {
-      this.toast(added === 1 ? 'Файл прикреплён' : `Прикреплено файлов: ${added}`);
+      this.toast(
+        added === 1
+          ? this.t('Файл прикреплён')
+          : this.t('Прикреплено файлов: {count}', { count: added })
+      );
       this.positionPopover(this.state.compose.element);
     }
   }
@@ -1897,8 +2105,8 @@ class ReviewClient {
       remove.className = 'pn-icon-btn pn-attachment-remove';
       remove.dataset.action = 'remove-compose-attachment';
       remove.dataset.id = String(index);
-      remove.setAttribute('aria-label', `Убрать ${attachment.name}`);
-      remove.title = 'Убрать файл';
+      remove.setAttribute('aria-label', this.t('Убрать {name}', { name: attachment.name }));
+      remove.title = this.t('Убрать файл');
       remove.textContent = '×';
       chip.append(name, remove);
       container.append(chip);
@@ -1913,8 +2121,8 @@ class ReviewClient {
 
   formatBytes(value) {
     const size = Number(value);
-    if (!Number.isFinite(size) || size <= 0) return '0 Б';
-    const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+    const units = [this.t('Б'), this.t('КБ'), this.t('МБ'), this.t('ГБ')];
+    if (!Number.isFinite(size) || size <= 0) return `0 ${units[0]}`;
     let amount = size;
     let index = 0;
     while (amount >= 1024 && index < units.length - 1) {
@@ -1939,7 +2147,9 @@ class ReviewClient {
       let message = `HTTP ${response.status}`;
       try {
         const data = await response.json();
-        if (data?.error) message = data.error;
+        if (data?.error) {
+          message = translateServerMessage(data.error, this.state.locale);
+        }
       } catch {
         // Ignore non-JSON errors.
       }
@@ -1953,11 +2163,11 @@ class ReviewClient {
     const compose = this.state.compose;
     if (!compose) return;
     if (!this.state.server) {
-      this.toast('Скриншоты доступны только с review-сервером', 'error');
+      this.toast(this.t('Скриншоты доступны только с review-сервером'), 'error');
       return;
     }
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      this.toast('Браузер не поддерживает захват вкладки', 'error');
+      this.toast(this.t('Браузер не поддерживает захват вкладки'), 'error');
       return;
     }
 
@@ -1976,33 +2186,36 @@ class ReviewClient {
       }
 
       const track = stream.getVideoTracks()[0];
-      if (!track) throw new Error('Не удалось получить видеопоток');
+      if (!track) throw new Error(this.t('Не удалось получить видеопоток'));
       const surface = track.getSettings?.().displaySurface;
       video = document.createElement('video');
       video.muted = true;
       video.playsInline = true;
       video.srcObject = stream;
       await new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('Не удалось получить кадр')), 6000);
+        const timer = setTimeout(
+          () => reject(new Error(this.t('Не удалось получить кадр'))),
+          6000
+        );
         video.onloadedmetadata = () => {
           clearTimeout(timer);
           resolve();
         };
         video.onerror = () => {
           clearTimeout(timer);
-          reject(new Error('Не удалось прочитать видеопоток'));
+          reject(new Error(this.t('Не удалось прочитать видеопоток')));
         };
       });
       await video.play();
 
       if (this.state.compose !== compose) return;
       if (surface && surface !== 'browser') {
-        throw new Error('Выбери вкладку с сайтом, а не окно или экран');
+        throw new Error(this.t('Выбери вкладку с сайтом, а не окно или экран'));
       }
       const videoRatio = video.videoWidth / video.videoHeight;
       const viewportRatio = innerWidth / innerHeight;
       if (Math.abs(videoRatio - viewportRatio) > 0.04) {
-        throw new Error('Выбери вкладку с сайтом, а не окно или экран');
+        throw new Error(this.t('Выбери вкладку с сайтом, а не окно или экран'));
       }
 
       const element = compose.element.isConnected ? compose.element : null;
@@ -2054,7 +2267,7 @@ class ReviewClient {
       this.openAnnotator(canvas);
     } catch (err) {
       if (err?.name !== 'NotAllowedError') {
-        this.toast(err.message || 'Не удалось сделать скриншот', 'error');
+        this.toast(err.message || this.t('Не удалось сделать скриншот'), 'error');
       }
     } finally {
       for (const track of stream?.getTracks?.() || []) track.stop();
@@ -2099,7 +2312,7 @@ class ReviewClient {
       button.dataset.color = color;
       button.style.setProperty('--pn-color', color);
       button.title = color;
-      button.setAttribute('aria-label', `Цвет линии ${color}`);
+      button.setAttribute('aria-label', this.t('Цвет линии {color}', { color }));
       container.append(button);
     }
     this.syncAnnotatorColor();
@@ -2225,7 +2438,7 @@ class ReviewClient {
     if (!annotator || !this.state.compose) return;
     const blob = await new Promise((resolve) => annotator.canvas.toBlob(resolve, 'image/png'));
     if (!blob) {
-      this.toast('Не удалось подготовить скриншот', 'error');
+      this.toast(this.t('Не удалось подготовить скриншот'), 'error');
       return;
     }
     this.clearScreenshot();
@@ -2240,7 +2453,7 @@ class ReviewClient {
     this.refs.shotPreview.hidden = false;
     this.positionPopover(this.state.compose.element);
     this.closeAnnotator();
-    this.toast('Скриншот прикреплён');
+    this.toast(this.t('Скриншот прикреплён'));
   }
 
   async uploadScreenshot(shot) {
@@ -2255,7 +2468,9 @@ class ReviewClient {
       let message = `HTTP ${response.status}`;
       try {
         const data = await response.json();
-        if (data?.error) message = data.error;
+        if (data?.error) {
+          message = translateServerMessage(data.error, this.state.locale);
+        }
       } catch {
         // Ignore non-JSON errors.
       }
@@ -2344,7 +2559,7 @@ class ReviewClient {
       if (!this.state.server) {
         this.state.busy = false;
         this.refs.saveButton.disabled = false;
-        this.toast('Скриншоты доступны только с review-сервером', 'error');
+        this.toast(this.t('Скриншоты доступны только с review-сервером'), 'error');
         return;
       }
       try {
@@ -2352,7 +2567,7 @@ class ReviewClient {
       } catch (err) {
         this.state.busy = false;
         this.refs.saveButton.disabled = false;
-        this.toast(err.message || 'Не удалось загрузить скриншот', 'error');
+        this.toast(err.message || this.t('Не удалось загрузить скриншот'), 'error');
         return;
       }
     }
@@ -2361,7 +2576,7 @@ class ReviewClient {
       if (!this.state.server) {
         this.state.busy = false;
         this.refs.saveButton.disabled = false;
-        this.toast('Файлы доступны только с review-сервером', 'error');
+        this.toast(this.t('Файлы доступны только с review-сервером'), 'error');
         return;
       }
       try {
@@ -2373,7 +2588,7 @@ class ReviewClient {
       } catch (err) {
         this.state.busy = false;
         this.refs.saveButton.disabled = false;
-        this.toast(err.message || 'Не удалось загрузить файл', 'error');
+        this.toast(err.message || this.t('Не удалось загрузить файл'), 'error');
         return;
       }
     }
@@ -2393,7 +2608,7 @@ class ReviewClient {
         if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
           this.state.busy = false;
           this.refs.saveButton.disabled = false;
-          this.toast(err.message || 'Не удалось сохранить комментарий', 'error');
+          this.toast(err.message || this.t('Не удалось сохранить комментарий'), 'error');
           return;
         }
         this.state.server = false;
@@ -2434,23 +2649,30 @@ class ReviewClient {
       this.state.viewedTaskId = savedTaskId;
       this.state.activeId = saved.id;
       if (this.state.taskFilter === 'closed') this.state.taskFilter = 'active';
-      this.state.panel = true;
-      this.refs.panel.hidden = false;
-      this.refs.panel.setAttribute('aria-hidden', 'false');
-      this.app.classList.add('has-panel');
-      this.refs.panelButton.setAttribute('aria-expanded', 'true');
-      this.refs.toggleLabel.textContent = 'Закрыть';
-      this.updatePageOffsets();
-      this.updateScrim();
-      this.notifySiteResize();
-      this.renderPanel();
+      // On narrow screens the compose popover covers the layout, so opening
+      // the task panel here would immediately hide the site again. Just leave
+      // the popover closed; the user opens the panel from the bar when needed.
+      if (innerWidth > MOBILE_BREAKPOINT) {
+        this.state.panel = true;
+        this.refs.panel.hidden = false;
+        this.refs.panel.setAttribute('aria-hidden', 'false');
+        this.app.classList.add('has-panel');
+        this.refs.panelButton.setAttribute('aria-expanded', 'true');
+        this.refs.toggleLabel.textContent = this.t('Закрыть');
+        this.updatePageOffsets();
+        this.updateScrim();
+        this.notifySiteResize();
+        this.renderPanel();
+      } else if (this.state.panel) {
+        this.setPanel(false);
+      }
       this.schedulePins();
       this.saveUiState();
     }
     this.toast(
       usedLocalFallback
-        ? 'Сервер недоступен — комментарий сохранён локально'
-        : 'Комментарий добавлен',
+        ? this.t('Сервер недоступен — комментарий сохранён локально')
+        : this.t('Комментарий добавлен'),
       usedLocalFallback ? 'error' : ''
     );
     this.setMode(false);
@@ -2465,7 +2687,8 @@ class ReviewClient {
       id: `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       number,
       status: 'active',
-      description: this.cleanText(description, 120) || `Задача T-${number}`,
+      description:
+        this.cleanText(description, 120) || this.t('Задача T-{number}', { number }),
       createdAt: now,
       updatedAt: now,
       submittedAt: null,
@@ -2484,7 +2707,7 @@ class ReviewClient {
       id: `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
       number,
       status: 'active',
-      description: `Задача T-${number}`,
+      description: this.t('Задача T-{number}', { number }),
       createdAt: now,
       updatedAt: now,
       submittedAt: null,
@@ -2498,7 +2721,12 @@ class ReviewClient {
 
   placeholderTaskDescription(task) {
     const description = String(task?.description || '').trim();
-    return !description || /^Задача\s+T-\d+$/i.test(description) || description === 'Новая задача';
+    return (
+      !description ||
+      /^(?:Задача|Task)\s+T-\d+$/i.test(description) ||
+      description === 'Новая задача' ||
+      description === 'New task'
+    );
   }
 
   createLocalComment(payload) {
@@ -2850,10 +3078,20 @@ class ReviewClient {
       pin.className = `pn-pin status-${comment.status || 'open'}${comment.id === this.state.activeId ? ' is-active' : ''}`;
       pin.textContent = String(number || 1);
       const pinTask = this.taskForComment(comment);
-      pin.title = [pinTask ? this.taskTag(pinTask) : '', `правка ${String(number).padStart(2, '0')}`, this.fixName(comment)]
+      pin.title = [
+        pinTask ? this.taskTag(pinTask) : '',
+        this.t('правка {number}', { number: String(number).padStart(2, '0') }),
+        this.fixName(comment),
+      ]
         .filter(Boolean)
         .join(' · ');
-      pin.setAttribute('aria-label', `Правка ${number || 1}: ${this.fixName(comment)}`);
+      pin.setAttribute(
+        'aria-label',
+        this.t('Правка {number}: {name}', {
+          number: number || 1,
+          name: this.fixName(comment),
+        })
+      );
       pin.style.left = `${Math.round(Math.min(innerWidth - 28, Math.max(4, rect.left - 10 + offset)))}px`;
       pin.style.top = `${Math.round(Math.min(innerHeight - 28, Math.max(4, rect.top - 10)))}px`;
       seen.add(comment.id);
@@ -2884,13 +3122,15 @@ class ReviewClient {
     this.refs.count.hidden = attention === 0;
     this.refs.count.textContent = attention > 0 ? String(attention) : '';
     const details = [];
-    if (pending > 0) details.push(`${pending} к проверке`);
-    if (working > 0) details.push(`${working} в работе`);
-    this.refs.count.title = details.join(' · ') || 'Нет активных правок';
+    if (pending > 0) details.push(this.t('{count} к проверке', { count: pending }));
+    if (working > 0) details.push(this.t('{count} в работе', { count: working }));
+    this.refs.count.title = details.join(' · ') || this.t('Нет активных правок');
     this.refs.count.classList.toggle('is-review', pending > 0);
     this.refs.panelButton.setAttribute(
       'aria-label',
-      `${this.state.panel ? 'Свернуть' : 'Открыть'} панель задач, ${attention} требуют внимания`
+      this.state.panel
+        ? this.t('Свернуть панель задач, {count} требуют внимания', { count: attention })
+        : this.t('Открыть панель задач, {count} требуют внимания', { count: attention })
     );
   }
 
@@ -2899,11 +3139,11 @@ class ReviewClient {
     const project = this.projectLabel();
     this.refs.server.classList.toggle('is-local', local);
     this.refs.server.textContent = local
-      ? `// LOCAL MODE · ${project} · только localStorage`
+      ? this.t('// LOCAL MODE · {project} · только localStorage', { project })
       : `// SYNC · ${project} · ${this.state.config.commentsFile || '.review/comments.json'}`;
     this.refs.server.title = local
-      ? 'Review-сервер не запущен: комментарии хранятся в localStorage.'
-      : 'Изменения подхватываются автоматически по SSE.';
+      ? this.t('Review-сервер не запущен: комментарии хранятся в localStorage.')
+      : this.t('Изменения подхватываются автоматически по SSE.');
   }
 
   renderPanelIfOpen() {
@@ -2929,42 +3169,58 @@ class ReviewClient {
 
   renderBar() {
     const current = this.currentTask();
-    const label = current ? this.taskTag(current) : 'НОВАЯ ЗАДАЧА';
+    const label = current ? this.taskTag(current) : this.t('НОВАЯ ЗАДАЧА');
     this.refs.currentTask.textContent = label;
     this.refs.currentTask.title = current
-      ? `Текущая задача · ${current.description || 'без описания'}`
-      : 'Задача появится с первым комментарием';
+      ? this.t('Текущая задача · {description}', {
+          description: this.taskDescriptionText(current, this.t('без описания')),
+        })
+      : this.t('Задача появится с первым комментарием');
     this.refs.currentTask.classList.toggle('is-empty', !current);
-    this.refs.hint.textContent = this.state.mode ? 'выберите элемент на странице' : this.projectLabel();
-    this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
+    this.refs.hint.textContent = this.state.mode
+      ? this.t('выберите элемент на странице')
+      : this.projectLabel();
+    this.updateModeButton();
     this.refs.panelButton.setAttribute('aria-expanded', String(this.state.panel));
-    this.refs.toggleLabel.textContent = this.state.panel ? 'Закрыть' : 'Открыть';
+    this.refs.panelButton.title = this.state.panel
+      ? this.t('Свернуть панель')
+      : this.t('Открыть панель');
+    this.refs.toggleLabel.textContent = this.state.panel ? this.t('Закрыть') : this.t('Открыть');
     this.renderSelectionActions();
     this.updateReloadNotice();
   }
 
   renderSelectionActions() {
+    const mobile = innerWidth <= MOBILE_BREAKPOINT;
     const selected = this.state.selected;
     const available =
       Boolean(selected) &&
       this.state.mode &&
       !this.state.compose &&
-      innerWidth <= MOBILE_BREAKPOINT;
-    this.refs.composeAction.hidden = !available;
+      mobile;
+    const connected = Boolean(selected?.element?.isConnected);
+    const armed = available && connected;
+    const composeLabel = armed
+      ? this.t('Написать комментарий к <{tag}>', { tag: selected.element.localName })
+      : available
+        ? this.t('Элемент больше не на странице')
+        : this.t('Написать комментарий');
+
+    this.refs.composeAction.hidden = !mobile;
+    this.refs.composeAction.disabled = !armed;
+    this.refs.composeAction.classList.toggle('is-armed', armed);
+    this.refs.composeAction.title = composeLabel;
+    this.refs.composeAction.setAttribute('aria-label', composeLabel);
+
     this.refs.parentAction.hidden = !available;
     if (!available) return;
     const element = selected.element;
-    const connected = element?.isConnected;
-    this.refs.composeAction.disabled = !connected;
-    this.refs.composeAction.title = connected
-      ? `Написать комментарий к <${element.localName}>`
-      : 'Элемент больше не на странице';
     const parent = connected ? element.parentElement : null;
     const canGoUp = Boolean(parent) && parent !== document.documentElement;
     this.refs.parentAction.disabled = !canGoUp;
     this.refs.parentAction.title = canGoUp
-      ? `Выбрать родительский элемент <${parent.localName}>`
-      : 'Выше уже некуда';
+      ? this.t('Выбрать родительский элемент <{tag}>', { tag: parent.localName })
+      : this.t('Выше уже некуда');
   }
 
   renderTaskList() {
@@ -2986,9 +3242,9 @@ class ReviewClient {
       empty.className = 'pn-empty';
       empty.textContent = all.length
         ? this.state.taskFilter === 'closed'
-          ? 'Закрытых задач пока нет.'
-          : 'Активных задач пока нет.'
-        : 'Выберите элемент на сайте, чтобы добавить первую правку.';
+          ? this.t('Закрытых задач пока нет.')
+          : this.t('Активных задач пока нет.')
+        : this.t('Выберите элемент на сайте, чтобы добавить первую правку.');
       panel.append(empty);
       return;
     }
@@ -3012,7 +3268,7 @@ class ReviewClient {
       date.textContent = this.taskDateLabel(task.createdAt);
       const badge = document.createElement('span');
       badge.className = `pn-badge status-${task.status}`;
-      badge.textContent = task.status === 'closed' ? 'Закрыта' : task.status === 'review' ? 'На проверке' : 'В работе';
+      badge.textContent = this.taskStatusText(task.status);
       top.append(date, badge);
 
       const name = document.createElement('h3');
@@ -3021,14 +3277,21 @@ class ReviewClient {
 
       const description = document.createElement('p');
       description.className = 'pn-task-desc';
-      description.textContent = task.description || 'Без описания';
+      description.textContent = this.taskDescriptionText(task);
 
       const bottom = document.createElement('div');
       bottom.className = 'pn-task-card-bottom';
       const meta = document.createElement('span');
-      meta.textContent = `${total} ${this.plural(total, 'правка', 'правки', 'правок')}`;
-      if (pending > 0) meta.textContent += ` · ${pending} к проверке`;
-      else if (total > 0 && accepted === total) meta.textContent += ' · готово';
+      meta.textContent = `${total} ${this.plural(
+        total,
+        'правка',
+        'правки',
+        'правок',
+        'fix',
+        'fixes'
+      )}`;
+      if (pending > 0) meta.textContent += this.t(' · {count} к проверке', { count: pending });
+      else if (total > 0 && accepted === total) meta.textContent += this.t(' · готово');
       const chev = document.createElement('span');
       chev.className = 'pn-task-chev';
       chev.setAttribute('aria-hidden', 'true');
@@ -3050,25 +3313,28 @@ class ReviewClient {
     this.refs.taskTitle.textContent = this.taskTag(task);
     this.refs.taskDate.textContent = this.taskDateLabel(task.createdAt);
     this.refs.taskDate.dateTime = task.createdAt || '';
-    this.refs.taskStatus.textContent = closed ? 'Закрыта' : task.status === 'review' ? 'На проверке' : 'В работе';
+    this.refs.taskStatus.textContent = this.taskStatusText(task.status);
     this.refs.taskStatus.className = `pn-badge status-${task.status}`;
-    this.refs.acceptedCount.textContent = `${accepted} из ${total}`;
+    this.refs.acceptedCount.textContent = this.t('{accepted} из {total}', { accepted, total });
     this.refs.progress.setAttribute('aria-valuemax', String(total || 1));
     this.refs.progress.setAttribute('aria-valuenow', String(accepted));
-    this.refs.progress.setAttribute('aria-valuetext', `${accepted} из ${total} правок принято`);
+    this.refs.progress.setAttribute(
+      'aria-valuetext',
+      this.t('{accepted} из {total} правок принято', { accepted, total })
+    );
     this.refs.progressFill.style.width = `${total ? (accepted / total) * 100 : 0}%`;
     this.refs.progress.classList.toggle('is-full', total > 0 && accepted === total);
 
     const ready = !closed && total > 0 && accepted === total && !this.state.confirmAction;
     this.refs.acceptTask.disabled = !ready;
-    this.refs.acceptTask.textContent = closed ? 'Принята' : 'Принять';
+    this.refs.acceptTask.textContent = closed ? this.t('Принята') : this.t('Принять');
     this.refs.acceptTask.title = closed
-      ? 'Задача уже принята'
+      ? this.t('Задача уже принята')
       : total === 0
-        ? 'В задаче нет правок'
+        ? this.t('В задаче нет правок')
         : accepted === total
-          ? 'Принять и завершить задачу'
-          : 'Сначала примите каждую правку';
+          ? this.t('Принять и завершить задачу')
+          : this.t('Сначала примите каждую правку');
 
     this.renderConfirm(task);
     this.renderAgentState(task);
@@ -3082,7 +3348,7 @@ class ReviewClient {
       this.refs.messages.replaceChildren();
       const empty = document.createElement('p');
       empty.className = 'pn-empty';
-      empty.textContent = 'В этой задаче пока нет правок.';
+      empty.textContent = this.t('В этой задаче пока нет правок.');
       this.refs.messages.append(empty);
       this.refs.composer.hidden = true;
       this.refs.acceptFix.disabled = true;
@@ -3099,8 +3365,10 @@ class ReviewClient {
       Boolean(this.state.confirmAction) ||
       (this.state.replyOpen && task.status !== 'closed');
     this.refs.threadTitle.textContent = selected
-      ? `// ДИАЛОГ · ПРАВКА ${String(this.fixNumber(selected)).padStart(2, '0')}`
-      : '// ДИАЛОГ';
+      ? this.t('// ДИАЛОГ · ПРАВКА {number}', {
+          number: String(this.fixNumber(selected)).padStart(2, '0'),
+        })
+      : this.t('// ДИАЛОГ');
     this.refs.confirm.hidden = !this.state.confirmAction;
   }
 
@@ -3110,17 +3378,24 @@ class ReviewClient {
     if (!action) return;
     this.refs.confirmLabel.textContent =
       action === 'delete'
-        ? `Удалить ${this.taskTag(task)} вместе со всеми правками? Это необратимо.`
-        : `Закрыть ${this.taskTag(task)}? Все её правки будут приняты.`;
-    this.refs.confirmButton.textContent = action === 'delete' ? 'Удалить' : 'Принять задачу';
+        ? this.t('Удалить {tag} вместе со всеми правками? Это необратимо.', {
+            tag: this.taskTag(task),
+          })
+        : this.t('Закрыть {tag}? Все её правки будут приняты.', {
+            tag: this.taskTag(task),
+          });
+    this.refs.confirmButton.textContent =
+      action === 'delete' ? this.t('Удалить') : this.t('Принять задачу');
   }
 
   agentErrorMessage(message) {
     const text = String(message || '').trim();
     if (/workspace routing discovery failed/i.test(text)) {
-      return 'Codex не смог определить workspace. Обнови Codex CLI, выполни «codex login» и перезапусти PinNote.';
+      return this.t(
+        'Codex не смог определить workspace. Обнови Codex CLI, выполни «codex login» и перезапусти PinNote.'
+      );
     }
-    return text;
+    return translateServerMessage(text, this.state.locale);
   }
 
   renderAgentState(task) {
@@ -3136,9 +3411,13 @@ class ReviewClient {
     const agentReady = this.agentEnabled();
     if (agent && agentReady && agent.status !== 'idle') {
       this.refs.agentActivity.hidden = false;
-      this.refs.agentActivity.textContent =
-        labels[agent.status] || 'AGENT';
-      this.refs.agentActivity.title = [agent.sessionId ? `Сессия: ${agent.sessionId}` : '', agent.error || '']
+      this.refs.agentActivity.textContent = labels[agent.status]
+        ? this.t(labels[agent.status])
+        : 'AGENT';
+      this.refs.agentActivity.title = [
+        agent.sessionId ? this.t('Сессия: {id}', { id: agent.sessionId }) : '',
+        this.agentErrorMessage(agent.error),
+      ]
         .filter(Boolean)
         .join(' · ');
       this.refs.agentActivity.className = `pn-agent-activity status-${agent.status}`;
@@ -3149,7 +3428,7 @@ class ReviewClient {
     if (agent?.error && (agent.status === 'error' || agent.status === 'cancelled')) {
       this.refs.agentNote.hidden = false;
       this.refs.agentNote.textContent = `AGENT // ${this.agentErrorMessage(agent.error)}`;
-      this.refs.agentNote.title = agent.error;
+      this.refs.agentNote.title = this.agentErrorMessage(agent.error);
     } else {
       this.refs.agentNote.hidden = true;
       this.refs.agentNote.textContent = '';
@@ -3161,7 +3440,9 @@ class ReviewClient {
       dispatch.hidden = !agentReady;
       dispatch.disabled = task.status === 'closed' || !this.taskFixes(task.id).length || busy;
       const rejected = this.taskFixes(task.id).some((fix) => fix.status === 'rejected');
-      dispatch.textContent = rejected ? 'Отправить на доработку' : 'Отправить агенту';
+      dispatch.textContent = rejected
+        ? this.t('Отправить на доработку')
+        : this.t('Отправить агенту');
     }
     if (cancel) {
       cancel.hidden = !agentReady;
@@ -3183,7 +3464,7 @@ class ReviewClient {
     if (fixes.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'pn-empty';
-      empty.textContent = 'Правок пока нет.';
+      empty.textContent = this.t('Правок пока нет.');
       this.refs.fixList.append(empty);
       return;
     }
@@ -3223,7 +3504,9 @@ class ReviewClient {
     }
     node.hidden = false;
     node.dataset.state = fix.status || 'open';
-    node.textContent = `// СОСТОЯНИЕ · ${this.fixStateLabel(task, fix)}`;
+    node.textContent = this.t('// СОСТОЯНИЕ · {state}', {
+      state: this.fixStateLabel(task, fix),
+    });
     node.title = this.fixStateLabel(task, fix);
   }
 
@@ -3234,6 +3517,7 @@ class ReviewClient {
       editing &&
       editing.commentId === comment.id &&
       !this.isAgentWorkingOnFix(comment) &&
+      !this.state.forceMessagesRender &&
       container.querySelector('[data-role="edit-input"]')
     ) {
       // Do not rebuild the dialogue while the customer is typing: an SSE
@@ -3277,6 +3561,7 @@ class ReviewClient {
     } else {
       container.scrollTop = previousScroll;
     }
+    this.state.forceMessagesRender = false;
   }
 
   isAgentBusy(taskId) {
@@ -3324,16 +3609,20 @@ class ReviewClient {
     container.dataset.state = 'agent';
     let label = 'Отправить всё агенту';
     let title = 'Отправить агенту все задачи с правками в работе';
+    let titleVars = null;
+    let titleText = '';
     let icon = '→';
 
     if (busyTaskId) {
       const busyTask = this.findTask(busyTaskId);
       container.dataset.state = 'stop';
       label = 'Остановить агента';
-      title =
-        busyTask && busyTask.id !== task.id
-          ? `Остановить агента в ${this.taskTag(busyTask)}`
-          : 'Прервать работу агента';
+      if (busyTask && busyTask.id !== task.id) {
+        title = 'Остановить агента в {tag}';
+        titleVars = { tag: this.taskTag(busyTask) };
+      } else {
+        title = 'Прервать работу агента';
+      }
       icon = '■';
     } else if (task.status === 'closed') {
       container.dataset.state = 'closed';
@@ -3357,7 +3646,8 @@ class ReviewClient {
       if (!this.agentEnabled()) {
         container.dataset.state = 'disabled';
         label = 'Агент не настроен';
-        title = this.state.agentConfig?.reason || 'Запустите PinNote с настроенным AI-агентом';
+        titleText =
+          this.agentConfigReason() || this.t('Запустите PinNote с настроенным AI-агентом');
         icon = '·';
         button.disabled = true;
       } else {
@@ -3383,10 +3673,10 @@ class ReviewClient {
       button.disabled = true;
     }
 
-    this.refs.taskActionLabel.textContent = label;
+    this.refs.taskActionLabel.textContent = this.t(label);
     this.refs.taskActionIcon.textContent = icon;
-    button.title = title;
-    button.setAttribute('aria-label', label);
+    button.title = titleText || this.t(title, titleVars);
+    button.setAttribute('aria-label', this.t(label));
   }
 
   async runTaskAction() {
@@ -3405,11 +3695,11 @@ class ReviewClient {
 
     if (working.length > 0) {
       if (!this.agentEnabled()) {
-        this.toast('AI-агент не настроен — скопируйте задание через меню', 'error');
+        this.toast(this.t('AI-агент не настроен — скопируйте задание через меню'), 'error');
         return;
       }
       if (this.anyAgentBusy()) {
-        this.toast('Агент уже выполняет задачу', 'error');
+        this.toast(this.t('Агент уже выполняет задачу'), 'error');
         return;
       }
       await this.dispatchAllAgentTasks(task.id);
@@ -3468,19 +3758,19 @@ class ReviewClient {
       this.refs.stopFixButton.hidden = !fixBusy;
       this.refs.stopFixButton.disabled = !fixBusy;
       this.refs.stopFixButton.title = fixBusy
-        ? 'Прервать работу агента над этой правкой'
-        : 'Агент не работает над этой правкой';
+        ? this.t('Прервать работу агента над этой правкой')
+        : this.t('Агент не работает над этой правкой');
     }
     this.refs.acceptFix.disabled = closed || !fix || fix.status !== 'review';
     this.refs.acceptFix.setAttribute('aria-pressed', String(this.isFixAccepted(fix)));
     this.refs.acceptLabel.textContent = this.isFixAccepted(fix)
-      ? 'Принята'
-      : 'Принять правку';
+      ? this.t('Принята')
+      : this.t('Принять правку');
     this.refs.acceptFix.title = this.isFixAccepted(fix)
-      ? 'Правка принята'
+      ? this.t('Правка принята')
       : fix.status === 'review'
-        ? 'Принять выбранную правку'
-        : 'Правка ещё не на проверке — принять можно после ответа агента';
+        ? this.t('Принять выбранную правку')
+        : this.t('Правка ещё не на проверке — принять можно после ответа агента');
     if (!open) {
       if (this.state.replyOpen) this.rememberReply();
       if (this.refs.replyInput) this.refs.replyInput.value = '';
@@ -3488,22 +3778,31 @@ class ReviewClient {
     }
     const toAgent = this.agentEnabled();
     this.refs.replyContext.textContent =
-      `// ПРАВКА ${String(this.fixNumber(fix)).padStart(2, '0')} · ${this.fixName(fix)}` +
-      (toAgent ? ' · ОТВЕТ УЙДЁТ АГЕНТУ' : '');
+      this.t('// ПРАВКА {number} · {name}', {
+        number: String(this.fixNumber(fix)).padStart(2, '0'),
+        name: this.fixName(fix),
+      }) + (toAgent ? this.t(' · ОТВЕТ УЙДЁТ АГЕНТУ') : '');
     this.fillReply();
-    this.refs.sendReply.title = toAgent ? 'Отправить агенту · ⌘ / Ctrl ↵' : 'Отправить · ⌘ / Ctrl ↵';
-    this.refs.sendReply.setAttribute('aria-label', toAgent ? 'Отправить агенту' : 'Отправить реплику');
+    this.refs.sendReply.title = toAgent
+      ? this.t('Отправить агенту · ⌘ / Ctrl ↵')
+      : this.t('Отправить · ⌘ / Ctrl ↵');
+    this.refs.sendReply.setAttribute(
+      'aria-label',
+      toAgent ? this.t('Отправить агенту') : this.t('Отправить реплику')
+    );
     this.refs.replyInput.placeholder = toAgent
-      ? 'Что доработать? Ответ сразу уйдёт агенту'
-      : 'Что уточнить или доделать?';
+      ? this.t('Что доработать? Ответ сразу уйдёт агенту')
+      : this.t('Что уточнить или доделать?');
   }
 
-  plural(count, one, few, many) {
-    const mod10 = count % 10;
-    const mod100 = count % 100;
-    if (mod10 === 1 && mod100 !== 11) return one;
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
-    return many;
+  plural(count, one, few, many, enOne = one, enMany = few) {
+    return pluralForm(this.state.locale, count, {
+      ruOne: one,
+      ruFew: few,
+      ruMany: many,
+      enOne,
+      enMany,
+    });
   }
 
   commentThreadMessages(comment) {
@@ -3532,9 +3831,9 @@ class ReviewClient {
     const hasResolution = messages.some((message) => message.kind === 'resolution');
     if (['resolved', 'wontfix', 'orphaned'].includes(status) && !hasResolution) {
       const fallback = {
-        resolved: comment.resolution || 'Комментарий решён.',
-        wontfix: comment.resolution || 'Решено не править.',
-        orphaned: comment.resolution || 'Элемент не найден в текущем DOM.',
+        resolved: comment.resolution || this.t('Комментарий решён.'),
+        wontfix: comment.resolution || this.t('Решено не править.'),
+        orphaned: comment.resolution || this.t('Элемент не найден в текущем DOM.'),
       };
       messages.push({
         role: 'system',
@@ -3567,7 +3866,7 @@ class ReviewClient {
     const author = document.createElement('span');
     author.className = 'pn-bubble-author';
     author.textContent =
-      role === 'agent' ? 'AGENT' : role === 'system' ? 'SYSTEM' : initial ? 'ВЫ' : 'ВЫ';
+      role === 'agent' ? 'AGENT' : role === 'system' ? 'SYSTEM' : this.t('ВЫ');
     const time = document.createElement('time');
     time.className = 'pn-bubble-time';
     time.textContent = this.formatTime(message?.at);
@@ -3575,25 +3874,26 @@ class ReviewClient {
     if (initial) {
       const kind = document.createElement('span');
       kind.className = 'pn-bubble-kind';
-      kind.textContent = '// ПЕРВОЕ СООБЩЕНИЕ';
+      kind.textContent = this.t('// ПЕРВОЕ СООБЩЕНИЕ');
       head.append(kind);
     } else if (message?.kind === 'rejection') {
       const kind = document.createElement('span');
       kind.className = 'pn-bubble-kind';
-      kind.textContent = '// ОТВЕТ ЗАКАЗЧИКА';
+      kind.textContent = this.t('// ОТВЕТ ЗАКАЗЧИКА');
       head.append(kind);
     } else if (message?.kind === 'resolution') {
       const kind = document.createElement('span');
       kind.className = 'pn-bubble-kind';
-      kind.textContent = role === 'agent' ? '// ОТВЕТ ИСПОЛНИТЕЛЯ' : '// РЕШЕНИЕ';
+      kind.textContent =
+        role === 'agent' ? this.t('// ОТВЕТ ИСПОЛНИТЕЛЯ') : this.t('// РЕШЕНИЕ');
       head.append(kind);
     }
     if (time.textContent) head.append(time);
     if (message?.editedAt) {
       const edited = document.createElement('span');
       edited.className = 'pn-bubble-edited';
-      edited.textContent = 'изменено';
-      edited.title = `Изменено ${this.formatTime(message.editedAt)}`;
+      edited.textContent = this.t('изменено');
+      edited.title = this.t('Изменено {time}', { time: this.formatTime(message.editedAt) });
       head.append(edited);
     }
     bubble.append(head);
@@ -3636,7 +3936,7 @@ class ReviewClient {
     input.maxLength = maxLength;
     input.dataset.role = 'edit-input';
     input.value = draft;
-    input.setAttribute('aria-label', 'Редактировать сообщение');
+    input.setAttribute('aria-label', this.t('Редактировать сообщение'));
     const actions = document.createElement('div');
     actions.className = 'pn-bubble-editor-actions';
     const save = document.createElement('button');
@@ -3644,13 +3944,13 @@ class ReviewClient {
     save.className = 'pn-inline-btn pn-inline-primary';
     save.dataset.action = 'save-message';
     save.dataset.role = 'edit-save';
-    save.textContent = 'Сохранить';
+    save.textContent = this.t('Сохранить');
     save.disabled = !draft.trim();
     const cancel = document.createElement('button');
     cancel.type = 'button';
     cancel.className = 'pn-inline-btn';
     cancel.dataset.action = 'cancel-edit-message';
-    cancel.textContent = 'Отмена';
+    cancel.textContent = this.t('Отмена');
     actions.append(save, cancel);
     box.append(input, actions);
     return box;
@@ -3665,8 +3965,8 @@ class ReviewClient {
     edit.dataset.action = 'edit-message';
     edit.dataset.id = commentId;
     if (messageId) edit.dataset.messageId = messageId;
-    edit.title = 'Редактировать комментарий';
-    edit.setAttribute('aria-label', 'Редактировать комментарий');
+    edit.title = this.t('Редактировать комментарий');
+    edit.setAttribute('aria-label', this.t('Редактировать комментарий'));
     edit.innerHTML =
       '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
       '<path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>' +
@@ -3697,13 +3997,15 @@ class ReviewClient {
       link.href = this.attachmentUrl(attachment);
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.title = `${attachment.name || 'Файл'}${attachment.size ? ` · ${this.formatBytes(attachment.size)}` : ''}`;
+      link.title = `${attachment.name || this.t('Файл')}${
+        attachment.size ? ` · ${this.formatBytes(attachment.size)}` : ''
+      }`;
       link.addEventListener('click', (event) => event.stopPropagation());
       if (this.attachmentIsImage(attachment)) {
         link.classList.add('is-image');
         const image = document.createElement('img');
         image.src = link.href;
-        image.alt = attachment.name || 'Изображение';
+        image.alt = attachment.name || this.t('Изображение');
         image.loading = 'lazy';
         image.addEventListener('error', () => link.classList.remove('is-image'));
         link.append(image);
@@ -3732,11 +4034,14 @@ class ReviewClient {
     const task = this.viewedTask() || (comment ? this.taskForComment(comment) : null);
     if (!comment || !task) return;
     if (task.status === 'closed') {
-      this.toast('Задача закрыта — ответить нельзя', 'error');
+      this.toast(this.t('Задача закрыта — ответить нельзя'), 'error');
       return;
     }
     if (this.isAgentWorkingOnFix(comment)) {
-      this.toast('Агент работает над этой правкой — дождитесь завершения или остановите его', 'error');
+      this.toast(
+        this.t('Агент работает над этой правкой — дождитесь завершения или остановите его'),
+        'error'
+      );
       return;
     }
     this.rememberReply();
@@ -3745,7 +4050,7 @@ class ReviewClient {
       this.refs.replyInput?.value ?? this.state.replyDrafts[key] ?? ''
     ).trim();
     if (!text) {
-      this.toast('Напишите ответ', 'error');
+      this.toast(this.t('Напишите ответ'), 'error');
       this.refs.replyInput?.focus();
       return;
     }
@@ -3763,7 +4068,11 @@ class ReviewClient {
         this.finishReply(key);
         this.state.scrollMessages = true;
         await this.refreshFromServer();
-        this.toast(toAgent ? 'Правка отправлена агенту на рассмотрение' : 'Ответ сохранён');
+        this.toast(
+          toAgent
+            ? this.t('Правка отправлена агенту на рассмотрение')
+            : this.t('Ответ сохранён')
+        );
         this.refs.replyButton.focus();
         this.maybeReload();
         return;
@@ -3793,11 +4102,11 @@ class ReviewClient {
       this.state.scrollMessages = true;
       this.saveLocal();
       this.renderAll();
-      this.toast('Ответ сохранён');
+      this.toast(this.t('Ответ сохранён'));
       this.refs.replyButton.focus();
       this.maybeReload();
     } catch (err) {
-      this.toast(err.message || 'Не удалось сохранить ответ', 'error');
+      this.toast(err.message || this.t('Не удалось сохранить ответ'), 'error');
       this.renderPanel();
     } finally {
       this.state.replyBusy = null;
@@ -3814,11 +4123,11 @@ class ReviewClient {
     link.href = this.screenshotUrl(screenshot.file);
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    link.title = 'Открыть скриншот';
+    link.title = this.t('Открыть скриншот');
     link.addEventListener('click', (event) => event.stopPropagation());
     const image = document.createElement('img');
     image.src = link.href;
-    image.alt = 'Скриншот к комментарию';
+    image.alt = this.t('Скриншот к комментарию');
     image.loading = 'lazy';
     image.addEventListener('error', () => link.remove());
     link.append(image);
@@ -3835,7 +4144,7 @@ class ReviewClient {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    return new Intl.DateTimeFormat('ru-RU', {
+    return new Intl.DateTimeFormat(localeTag(this.state.locale), {
       day: '2-digit',
       month: 'short',
       hour: '2-digit',
@@ -3846,6 +4155,9 @@ class ReviewClient {
   async handleAction(action, id, filter, color, messageId = '') {
     if (action !== 'task-menu') this.state.taskMenuOpen = false;
     switch (action) {
+      case 'language':
+        this.setLanguage(id);
+        break;
       case 'mode':
         this.setMode(!this.state.mode);
         break;
@@ -4031,7 +4343,12 @@ class ReviewClient {
     this.saveUiState();
     this.scrollToFix(comment);
     this.schedulePins();
-    this.announce(`Выбрана правка ${this.fixNumber(comment)}. ${this.fixName(comment)}.`);
+    this.announce(
+      this.t('Выбрана правка {number}. {name}.', {
+        number: this.fixNumber(comment),
+        name: this.fixName(comment),
+      })
+    );
   }
 
   focusFix(id) {
@@ -4118,11 +4435,14 @@ class ReviewClient {
     const task = this.viewedTask();
     const fix = this.selectedFix();
     if (!task || !fix || task.status === 'closed') {
-      this.toast('Ответить можно только в открытой задаче', 'error');
+      this.toast(this.t('Ответить можно только в открытой задаче'), 'error');
       return;
     }
     if (this.isAgentWorkingOnFix(fix)) {
-      this.toast('Агент работает над этой правкой — дождитесь завершения или остановите его', 'error');
+      this.toast(
+        this.t('Агент работает над этой правкой — дождитесь завершения или остановите его'),
+        'error'
+      );
       return;
     }
     this.state.replyOpen = true;
@@ -4143,13 +4463,16 @@ class ReviewClient {
     const comment = this.findComment(commentId);
     if (!comment) return;
     if (this.isAgentWorkingOnFix(comment)) {
-      this.toast('Агент работает над этой правкой — дождитесь завершения', 'error');
+      this.toast(
+        this.t('Агент работает над этой правкой — дождитесь завершения'),
+        'error'
+      );
       return;
     }
     const forMessage = Boolean(messageId);
     const message = forMessage ? this.commentUserMessage(comment, messageId) : null;
     if (forMessage && !message) {
-      this.toast('Это сообщение нельзя редактировать', 'error');
+      this.toast(this.t('Это сообщение нельзя редактировать'), 'error');
       return;
     }
     this.rememberReply();
@@ -4184,13 +4507,16 @@ class ReviewClient {
     const comment = this.findComment(editing.commentId);
     if (!comment) return;
     if (this.isAgentWorkingOnFix(comment)) {
-      this.toast('Агент работает над этой правкой — редактирование недоступно', 'error');
+      this.toast(
+        this.t('Агент работает над этой правкой — редактирование недоступно'),
+        'error'
+      );
       return;
     }
     const input = this.shadow.querySelector('[data-role="edit-input"]');
     const nextText = String(input?.value ?? editing.draft ?? '').trim();
     if (!nextText) {
-      this.toast('Комментарий не может быть пустым', 'error');
+      this.toast(this.t('Комментарий не может быть пустым'), 'error');
       input?.focus();
       return;
     }
@@ -4213,7 +4539,7 @@ class ReviewClient {
         const now = new Date().toISOString();
         if (messageId) {
           const message = this.commentUserMessage(comment, messageId);
-          if (!message) throw new Error('Сообщение не найдено');
+          if (!message) throw new Error(this.t('Сообщение не найдено'));
           const previousText = message.text;
           message.text = nextText;
           message.editedAt = now;
@@ -4231,7 +4557,7 @@ class ReviewClient {
         this.state.editingMessage = null;
         this.saveLocal();
         this.renderAll();
-        this.toast('Комментарий изменён');
+        this.toast(this.t('Комментарий изменён'));
         this.maybeReload();
         return;
       }
@@ -4255,10 +4581,10 @@ class ReviewClient {
       this.state.editingMessage = null;
       await this.refreshFromServer();
       this.renderAll();
-      this.toast('Комментарий изменён');
+      this.toast(this.t('Комментарий изменён'));
       this.maybeReload();
     } catch (err) {
-      this.toast(err.message || 'Не удалось изменить комментарий', 'error');
+      this.toast(err.message || this.t('Не удалось изменить комментарий'), 'error');
     } finally {
       this.state.busy = false;
       if (this.state.editingMessage) {
@@ -4274,11 +4600,11 @@ class ReviewClient {
     const fix = this.selectedFix();
     if (!task || !fix) return;
     if (task.status === 'closed') {
-      this.toast('Задача уже принята', 'error');
+      this.toast(this.t('Задача уже принята'), 'error');
       return;
     }
     if (fix.status !== 'review') {
-      this.toast('Принять можно правку на проверке', 'error');
+      this.toast(this.t('Принять можно правку на проверке'), 'error');
       return;
     }
     const saved = await this.updateComment(fix.id, { status: 'approved' }, { toast: false });
@@ -4288,15 +4614,23 @@ class ReviewClient {
     this.renderAll();
     const fixes = this.taskFixes(task.id);
     const accepted = fixes.filter((item) => this.isFixAccepted(item)).length;
-    this.toast(`Правка принята · ${accepted} из ${fixes.length}`);
-    this.announce(`Правка ${this.fixNumber(fix)} принята. Принято ${accepted} из ${fixes.length}.`);
+    this.toast(
+      this.t('Правка принята · {accepted} из {total}', { accepted, total: fixes.length })
+    );
+    this.announce(
+      this.t('Правка {number} принята. Принято {accepted} из {total}.', {
+        number: this.fixNumber(fix),
+        accepted,
+        total: fixes.length,
+      })
+    );
   }
 
   async acceptTask() {
     const task = this.viewedTask();
     if (!task || task.status === 'closed') return;
     if (!this.taskAccepted(task)) {
-      this.toast('Сначала примите каждую правку', 'error');
+      this.toast(this.t('Сначала примите каждую правку'), 'error');
       return;
     }
     await this.acceptViewedTask(task);
@@ -4317,10 +4651,10 @@ class ReviewClient {
         this.state.confirmAction = '';
         this.renderAll();
         this.saveUiState();
-        this.toast(`${this.taskTag(task)} принята`);
+        this.toast(this.t('{tag} принята', { tag: this.taskTag(task) }));
       } catch (err) {
         this.refreshFromServer();
-        this.toast(err.message || 'Не удалось принять задачу', 'error');
+        this.toast(err.message || this.t('Не удалось принять задачу'), 'error');
       }
       return;
     }
@@ -4341,7 +4675,7 @@ class ReviewClient {
     this.saveLocal();
     this.renderAll();
     this.saveUiState();
-    this.toast(`${this.taskTag(task)} принята`);
+    this.toast(this.t('{tag} принята', { tag: this.taskTag(task) }));
   }
 
   updateAddTaskState() {
@@ -4368,7 +4702,7 @@ class ReviewClient {
           task = data?.task || null;
         } catch (err) {
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
-            this.toast(err.message || 'Не удалось добавить задачу', 'error');
+            this.toast(err.message || this.t('Не удалось добавить задачу'), 'error');
             return;
           }
           this.state.server = false;
@@ -4390,15 +4724,15 @@ class ReviewClient {
       }
 
       if (!this.findTask(task.id)) {
-        this.toast('Не удалось открыть добавленную задачу', 'error');
+        this.toast(this.t('Не удалось открыть добавленную задачу'), 'error');
         return;
       }
       if (this.state.taskFilter === 'closed') this.state.taskFilter = 'active';
       this.openTask(task.id);
       this.toast(
         usedLocalFallback
-          ? 'Сервер недоступен — задача сохранена локально'
-          : `Добавлена ${this.taskTag(task)}`,
+          ? this.t('Сервер недоступен — задача сохранена локально')
+          : this.t('Добавлена {tag}', { tag: this.taskTag(task) }),
         usedLocalFallback ? 'error' : ''
       );
     } finally {
@@ -4418,7 +4752,10 @@ class ReviewClient {
   async refresh() {
     if (this.state.server) {
       const ok = await this.refreshFromServer();
-      this.toast(ok ? 'Данные обновлены' : 'Не удалось получить данные', ok ? '' : 'error');
+      this.toast(
+        ok ? this.t('Данные обновлены') : this.t('Не удалось получить данные'),
+        ok ? '' : 'error'
+      );
     } else {
       const local = this.loadLocal();
       this.state.comments = local.comments;
@@ -4428,7 +4765,7 @@ class ReviewClient {
       this.normalizeSelection();
       this.renderAll();
       if (this.state.panel) this.renderPanel();
-      this.toast('Локальные данные обновлены');
+      this.toast(this.t('Локальные данные обновлены'));
     }
   }
 
@@ -4466,7 +4803,7 @@ class ReviewClient {
     const task = this.viewedTask();
     if (!task || task.status === 'closed') return;
     if (!this.taskAccepted(task)) {
-      this.toast('Сначала примите каждую правку', 'error');
+      this.toast(this.t('Сначала примите каждую правку'), 'error');
       return;
     }
     if (this.isAgentBusy(task.id)) await this.cancelAgent(task.id, { silent: true });
@@ -4484,9 +4821,9 @@ class ReviewClient {
         this.state.confirmAction = '';
         this.renderAll();
         this.saveUiState();
-        this.toast(`${this.taskTag(task)} принята`);
+        this.toast(this.t('{tag} принята', { tag: this.taskTag(task) }));
       } catch (err) {
-        this.toast(err.message || 'Не удалось закрыть задачу', 'error');
+        this.toast(err.message || this.t('Не удалось закрыть задачу'), 'error');
       }
       return;
     }
@@ -4511,18 +4848,21 @@ class ReviewClient {
     this.saveLocal();
     this.renderAll();
     this.saveUiState();
-    this.toast(`${this.taskTag(task)} принята`);
+    this.toast(this.t('{tag} принята', { tag: this.taskTag(task) }));
   }
 
   async dispatchAllAgentTasks(preferredTaskId = null) {
     if (!this.state.server) {
-      this.toast('AI-агент доступен только при запущенном review-сервере', 'error');
+      this.toast(
+        this.t('AI-агент доступен только при запущенном review-сервере'),
+        'error'
+      );
       return;
     }
     if (!this.agentEnabled()) {
       this.toast(
-        this.state.agentConfig?.reason ||
-          'AI-агент не настроен. Запусти PinNote с --agent dsh или --agent codex.',
+        this.agentConfigReason() ||
+          this.t('AI-агент не настроен. Запусти PinNote с --agent dsh или --agent codex.'),
         'error'
       );
       return;
@@ -4537,11 +4877,17 @@ class ReviewClient {
       else this.renderPanel();
       if (queued > 0) {
         this.toast(
-          `Агенту отправлено: ${queued} ${this.plural(queued, 'задача', 'задачи', 'задач')} — по очереди`
+          this.t('Агенту отправлено: {count} {tasks} — по очереди', {
+            count: queued,
+            tasks: this.plural(queued, 'задача', 'задачи', 'задач', 'task', 'tasks'),
+          })
         );
       }
     } catch (err) {
-      this.toast(err.message || 'Не удалось отправить задачи агенту', 'error');
+      this.toast(
+        err.message || this.t('Не удалось отправить задачи агенту'),
+        'error'
+      );
     }
   }
 
@@ -4549,13 +4895,16 @@ class ReviewClient {
     const task = (taskId && this.findTask(taskId)) || this.selectedTask();
     if (!task) return;
     if (!this.state.server) {
-      this.toast('AI-агент доступен только при запущенном review-сервере', 'error');
+      this.toast(
+        this.t('AI-агент доступен только при запущенном review-сервере'),
+        'error'
+      );
       return;
     }
     if (!this.agentEnabled()) {
       this.toast(
-        this.state.agentConfig?.reason ||
-          'AI-агент не настроен. Запусти PinNote с --agent dsh или --agent codex.',
+        this.agentConfigReason() ||
+          this.t('AI-агент не настроен. Запусти PinNote с --agent dsh или --agent codex.'),
         'error'
       );
       return;
@@ -4571,11 +4920,11 @@ class ReviewClient {
       if (data?.agent) this.applyAgentEvent(data.agent);
       this.toast(
         effectiveMode === 'rework'
-          ? 'Задача отправлена агенту на доработку'
-          : 'Задача отправлена агенту'
+          ? this.t('Задача отправлена агенту на доработку')
+          : this.t('Задача отправлена агенту')
       );
     } catch (err) {
-      this.toast(err.message || 'Не удалось отправить задачу агенту', 'error');
+      this.toast(err.message || this.t('Не удалось отправить задачу агенту'), 'error');
     }
   }
 
@@ -4594,7 +4943,7 @@ class ReviewClient {
     const targetId = taskId || this.busyAgentTaskId() || this.selectedTask()?.id;
     const task = targetId ? this.findTask(targetId) : null;
     if (!task) {
-      if (!silent) this.toast('Нет запущенного агента', 'error');
+      if (!silent) this.toast(this.t('Нет запущенного агента'), 'error');
       return false;
     }
     if (!this.state.server || !this.agentEnabled()) return false;
@@ -4603,10 +4952,10 @@ class ReviewClient {
         method: 'POST',
       });
       if (data?.agent) this.applyAgentEvent(data.agent);
-      if (!silent) this.toast('Агент остановлен');
+      if (!silent) this.toast(this.t('Агент остановлен'));
       return true;
     } catch (err) {
-      if (!silent) this.toast(err.message || 'Не удалось остановить агента', 'error');
+      if (!silent) this.toast(err.message || this.t('Не удалось остановить агента'), 'error');
       return false;
     }
   }
@@ -4621,7 +4970,7 @@ class ReviewClient {
       });
       if (data?.agent) this.applyAgentEvent({ ...data.agent, reset: true });
     } catch (err) {
-      this.toast(err.message || 'Не удалось сбросить сессию агента', 'error');
+      this.toast(err.message || this.t('Не удалось сбросить сессию агента'), 'error');
     }
   }
 
@@ -4643,9 +4992,9 @@ class ReviewClient {
         }
         this.renderAll();
         this.saveUiState();
-        this.toast(`${this.taskTag(task)} удалена`);
+        this.toast(this.t('{tag} удалена', { tag: this.taskTag(task) }));
       } catch (err) {
-        this.toast(err.message || 'Не удалось удалить задачу', 'error');
+        this.toast(err.message || this.t('Не удалось удалить задачу'), 'error');
       }
       return;
     }
@@ -4661,7 +5010,7 @@ class ReviewClient {
     this.saveLocal();
     this.renderAll();
     this.saveUiState();
-    this.toast(`${this.taskTag(task)} удалена`);
+    this.toast(this.t('{tag} удалена', { tag: this.taskTag(task) }));
   }
 
   async updateComment(id, patch, { toast = true, render = true } = {}) {
@@ -4675,7 +5024,7 @@ class ReviewClient {
         if (comment && data?.comment) Object.assign(comment, data.comment);
         if (data?.agent) this.applyAgentEvent(data.agent);
       } catch (err) {
-        this.toast(err.message || 'Не удалось обновить комментарий', 'error');
+        this.toast(err.message || this.t('Не удалось обновить комментарий'), 'error');
         return false;
       }
     } else {
@@ -4695,7 +5044,7 @@ class ReviewClient {
         if (status === 'rejected') {
           const reason = String(patch.rejectionReason || '').trim();
           if (!reason) {
-            this.toast('Укажите причину отклонения', 'error');
+            this.toast(this.t('Укажите причину отклонения'), 'error');
             return false;
           }
           comment.rejection = { reason, at: now };
@@ -4770,7 +5119,13 @@ class ReviewClient {
         wontfix: 'Комментарий помечен «Не правим»',
         orphaned: 'Комментарий помечен «Не найден»',
       };
-      this.toast(patch.status ? messages[patch.status] || 'Статус обновлён' : 'Комментарий сохранён');
+      this.toast(
+        patch.status
+          ? messages[patch.status]
+            ? this.t(messages[patch.status])
+            : this.t('Статус обновлён')
+          : this.t('Комментарий сохранён')
+      );
     }
     return true;
   }
@@ -4783,7 +5138,7 @@ class ReviewClient {
     const openComments = taskComments.filter((comment) => isOpenStatus(comment.status));
     const comments = openComments.length > 0 ? openComments : taskComments;
     if (comments.length === 0) {
-      this.toast('Комментариев пока нет');
+      this.toast(this.t('Комментариев пока нет'));
       return;
     }
     const markdown = formatAllMarkdown(comments, {
@@ -4792,7 +5147,7 @@ class ReviewClient {
       task,
     });
     const copied = await this.copyText(markdown);
-    if (copied) this.toast('Задание скопировано — вставьте его в чат агенту');
+    if (copied) this.toast(this.t('Задание скопировано — вставьте его в чат агенту'));
     else this.download('feedback.md', markdown);
   }
 
@@ -4829,7 +5184,7 @@ class ReviewClient {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    this.toast(`Скачан ${filename}`);
+    this.toast(this.t('Скачан {filename}', { filename }));
   }
 
   dismissToast() {

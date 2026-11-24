@@ -89,6 +89,13 @@ test('serves static assets with the correct content type', async () => {
   assert.match(await response.text(), /hero-title/);
 });
 
+test('serves the i18n catalog next to the review client', async () => {
+  const response = await fetch(`${base}/__review/i18n.js`);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type') || '', /javascript/);
+  assert.match(await response.text(), /EN_MESSAGES/);
+});
+
 test('does not expose the review data directory', async () => {
   const response = await fetch(`${base}/.review/comments.json`);
   assert.equal(response.status, 404);
