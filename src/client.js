@@ -35,6 +35,17 @@ const STATIC_HTML = `
       <span>Обновить сайт</span>
     </button>
     <span class="pn-count" data-role="count" hidden aria-live="polite"></span>
+    <button type="button" class="pn-compose-action pn-parent-action" data-action="select-parent" data-role="parent-action" hidden aria-label="Выбрать родительский элемент" title="Выбрать родительский элемент">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M7 20h10M12 16V5M7 10l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <button type="button" class="pn-compose-action" data-action="compose-selection" data-role="compose-action" hidden aria-label="Написать комментарий" title="Написать комментарий">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="m14 7 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </svg>
+    </button>
     <button type="button" class="pn-panel-toggle" data-action="panel" aria-expanded="false" title="Открыть панель">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
@@ -266,6 +277,8 @@ class ReviewClient {
       server: false,
       config: {},
       compose: null,
+      selected: null,
+      pickHintShown: false,
       replyDrafts: {},
       replyOpen: false,
       replyBusy: null,
@@ -319,6 +332,8 @@ class ReviewClient {
       hint: find('hint'),
       count: find('count'),
       reloadSite: find('reload-site'),
+      composeAction: find('compose-action'),
+      parentAction: find('parent-action'),
       toggleLabel: find('toggle-label'),
       taskFilters: [...this.shadow.querySelectorAll('[data-action="task-filter"]')],
       taskCount: find('task-count'),
@@ -388,6 +403,13 @@ class ReviewClient {
       this.host.addEventListener(type, (event) => event.stopPropagation(), {
         passive: true,
       });
+    }
+
+    // While a native modal is open the host is moved inside the dialog, so
+    // site handlers would otherwise see our clicks as "outside" clicks and
+    // close the modal. PinNote handles its own events first (document capture).
+    for (const type of ['click', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'contextmenu']) {
+      this.host.addEventListener(type, (event) => event.stopPropagation());
     }
 
     this.app.addEventListener('click', (event) => {
@@ -588,6 +610,7 @@ class ReviewClient {
     }
     this.host.dataset.panel = this.state.panel ? 'open' : 'closed';
     this.host.dataset.mobile = mobile ? 'true' : 'false';
+    this.renderBar();
     this.scheduleFixedRebase();
   }
 
@@ -684,6 +707,9 @@ class ReviewClient {
     const siteWidth = innerWidth - panel;
     const elements = document.body.querySelectorAll('*');
     for (const element of elements) {
+      // The host can temporarily live inside an open dialog (to escape the
+      // modal's inertness). It is our own fixed layer, not a site layer.
+      if (element === this.host) continue;
       let base = this.fixedElements.get(element);
       if (!base) {
         base = this.rememberFixedBase(element);
@@ -1157,21 +1183,33 @@ class ReviewClient {
 
     const clicked = this.targetElement(event);
     if (!clicked) return;
+    const mobile = innerWidth <= MOBILE_BREAKPOINT;
 
-    if (!event.altKey) {
-      this.openCompose(clicked, event);
+    if (event.altKey) {
+      const current = this.state.compose?.element || this.state.selected?.element;
+      const base =
+        current?.isConnected && (current === clicked || current.contains(clicked))
+          ? current
+          : clicked;
+      const parent = base.parentElement;
+      if (!parent || parent === document.documentElement) {
+        this.toast('Выше уже некуда');
+        return;
+      }
+      if (mobile && !this.state.compose) this.selectElement(parent, event);
+      else if (this.state.compose) this.updateComposeTarget(parent, event);
+      else this.openCompose(parent, event);
       return;
     }
 
-    const current = this.state.compose?.element;
-    if (current?.isConnected && (current === clicked || current.contains(clicked))) {
-      this.selectParent(event);
+    // On narrow screens the compose popover covers the layout, so pick the
+    // element first and open the popover from the bar button instead.
+    if (mobile && !this.state.compose) {
+      this.selectElement(clicked, event);
       return;
     }
 
-    const parent = clicked.parentElement;
-    if (!parent || parent === document.documentElement) return;
-    this.openCompose(parent, event);
+    this.openCompose(clicked, event);
   }
 
   onPageSubmit(event) {
@@ -1569,6 +1607,7 @@ class ReviewClient {
 
   setMode(active) {
     this.state.mode = Boolean(active);
+    this.state.selected = null;
     this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
     const modeLabel = this.state.mode ? 'Остановить комментирование' : 'Комментировать';
     this.refs.modeButton.setAttribute('aria-label', modeLabel);
@@ -1578,6 +1617,7 @@ class ReviewClient {
     this.refs.hint.textContent = this.state.mode
       ? 'выберите элемент на странице'
       : this.projectLabel();
+    this.renderBar();
     if (!this.state.mode) {
       this.state.hovered = null;
       this.closeCompose({ reload: false });
@@ -1588,7 +1628,11 @@ class ReviewClient {
     if (innerWidth <= MOBILE_BREAKPOINT) this.setPanel(false);
     if (!this.state.hintShown) {
       this.state.hintShown = true;
-      this.toast('Кликните по элементу. Alt/Option+клик — подняться по дереву.');
+      this.toast(
+        innerWidth <= MOBILE_BREAKPOINT
+          ? 'Кликните по элементу, затем нажмите кнопку с карандашом в баре.'
+          : 'Кликните по элементу. Alt/Option+клик — подняться по дереву.'
+      );
     }
   }
 
@@ -1635,19 +1679,85 @@ class ReviewClient {
     return this.state.config?.project || location.hostname || 'website';
   }
 
-  openCompose(element, event) {
+  selectElement(element, event) {
+    const anchor = this.captureAnchor(element, event);
+    this.state.selected = { element, anchor };
+    this.state.hovered = element;
+    this.renderBar();
+    this.scheduleHighlight();
+    if (!this.state.pickHintShown) {
+      this.state.pickHintShown = true;
+      this.toast('Элемент выбран. Нажмите кнопку с карандашом в баре.');
+    } else {
+      this.announce(`Выбран элемент ${this.describeElement(element)}.`);
+    }
+  }
+
+  clearSelection() {
+    if (!this.state.selected) return;
+    this.state.selected = null;
+    if (!this.state.compose) {
+      this.state.hovered = null;
+      this.scheduleHighlight();
+    }
+    this.renderBar();
+  }
+
+  composeSelectedElement() {
+    const selected = this.state.selected;
+    if (!selected) return;
+    this.dismissToast();
+    if (!selected.element?.isConnected) {
+      this.clearSelection();
+      this.toast('Элемент больше не на странице', 'error');
+      return;
+    }
+    this.state.selected = null;
+    this.openCompose(selected.element, null, selected.anchor);
+  }
+
+  selectParentOfSelection() {
+    const selected = this.state.selected;
+    if (!selected) return;
+    if (!selected.element?.isConnected) {
+      this.clearSelection();
+      this.toast('Элемент больше не на странице', 'error');
+      return;
+    }
+    const parent = selected.element.parentElement;
+    if (!parent || parent === document.documentElement) {
+      this.toast('Выше уже некуда');
+      return;
+    }
+    const point = selected.anchor?.point;
+    let event = null;
+    if (point) {
+      const rect = selected.element.getBoundingClientRect();
+      event = {
+        clientX: rect.left + point.x * rect.width,
+        clientY: rect.top + point.y * rect.height,
+      };
+    }
+    this.selectElement(parent, event);
+  }
+
+  openCompose(element, event, anchorOverride = null) {
     this.clearScreenshot();
     this.clearComposeAttachments();
-    const anchor = this.captureAnchor(element, event);
+    this.state.selected = null;
+    const anchor = anchorOverride || this.captureAnchor(element, event);
     const rect = element.getBoundingClientRect();
+    const point = event
+      ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top }
+      : anchor?.point
+        ? { offsetX: anchor.point.x * rect.width, offsetY: anchor.point.y * rect.height }
+        : null;
     this.state.compose = {
       element,
       anchor,
       screenshot: null,
       attachments: [],
-      click: event
-        ? { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top }
-        : null,
+      click: point,
     };
     this.state.hovered = element;
     if (innerWidth <= MOBILE_BREAKPOINT) this.setPanel(false);
@@ -1659,19 +1769,9 @@ class ReviewClient {
     this.refs.saveButton.disabled = true;
     this.refs.popover.hidden = false;
     this.positionPopover(element);
+    this.renderSelectionActions();
     this.scheduleHighlight();
     requestAnimationFrame(() => this.refs.input.focus());
-  }
-
-  selectParent(event) {
-    const compose = this.state.compose;
-    if (!compose) return;
-    const parent = compose.element?.parentElement;
-    if (!parent || parent === document.documentElement) {
-      this.toast('Выше уже некуда');
-      return;
-    }
-    this.updateComposeTarget(parent, event);
   }
 
   updateComposeTarget(element, event) {
@@ -2216,11 +2316,13 @@ class ReviewClient {
     this.clearScreenshot();
     this.clearComposeAttachments();
     this.state.compose = null;
+    this.state.selected = null;
     this.refs.popover.hidden = true;
     this.refs.input.value = '';
     this.refs.input.blur();
     this.refs.saveButton.disabled = true;
     this.state.hovered = null;
+    this.renderSelectionActions();
     this.scheduleHighlight();
     if (reload) this.maybeReload();
   }
@@ -2837,7 +2939,32 @@ class ReviewClient {
     this.refs.modeButton.setAttribute('aria-pressed', String(this.state.mode));
     this.refs.panelButton.setAttribute('aria-expanded', String(this.state.panel));
     this.refs.toggleLabel.textContent = this.state.panel ? 'Закрыть' : 'Открыть';
+    this.renderSelectionActions();
     this.updateReloadNotice();
+  }
+
+  renderSelectionActions() {
+    const selected = this.state.selected;
+    const available =
+      Boolean(selected) &&
+      this.state.mode &&
+      !this.state.compose &&
+      innerWidth <= MOBILE_BREAKPOINT;
+    this.refs.composeAction.hidden = !available;
+    this.refs.parentAction.hidden = !available;
+    if (!available) return;
+    const element = selected.element;
+    const connected = element?.isConnected;
+    this.refs.composeAction.disabled = !connected;
+    this.refs.composeAction.title = connected
+      ? `Написать комментарий к <${element.localName}>`
+      : 'Элемент больше не на странице';
+    const parent = connected ? element.parentElement : null;
+    const canGoUp = Boolean(parent) && parent !== document.documentElement;
+    this.refs.parentAction.disabled = !canGoUp;
+    this.refs.parentAction.title = canGoUp
+      ? `Выбрать родительский элемент <${parent.localName}>`
+      : 'Выше уже некуда';
   }
 
   renderTaskList() {
@@ -3724,6 +3851,12 @@ class ReviewClient {
         break;
       case 'panel':
         this.setPanel(!this.state.panel);
+        break;
+      case 'compose-selection':
+        this.composeSelectedElement();
+        break;
+      case 'select-parent':
+        this.selectParentOfSelection();
         break;
       case 'close-panel':
         this.closePanel();
@@ -4699,6 +4832,14 @@ class ReviewClient {
     this.toast(`Скачан ${filename}`);
   }
 
+  dismissToast() {
+    if (this.state.toastTimer) {
+      clearTimeout(this.state.toastTimer);
+      this.state.toastTimer = null;
+    }
+    if (this.refs.toast) this.refs.toast.hidden = true;
+  }
+
   toast(message, type = '') {
     const { toast } = this.refs;
     toast.textContent = message;
@@ -4709,6 +4850,219 @@ class ReviewClient {
       toast.hidden = true;
       this.state.toastTimer = null;
     }, 3200);
+  }
+}
+
+function isDialogElement(node) {
+  return node instanceof Element && node.localName === 'dialog';
+}
+
+const HOST_LAYOUT = {
+  position: 'fixed',
+  inset: '0',
+  'z-index': '2147483647',
+  'pointer-events': 'none',
+  margin: '0',
+  padding: '0',
+  border: '0',
+  background: 'transparent',
+  overflow: 'visible',
+};
+
+// Native modals live in the browser top layer: no z-index can outbid them, and
+// `showModal()` makes everything outside the dialog inert. The only way to keep
+// PinNote usable is to join the top layer as a manual popover and, while a
+// modal is open, to live inside that dialog (an inert ancestor would otherwise
+// swallow every click). Popovers also let us stay above site popovers and
+// escape dialogs with transforms/clipping.
+class OverlayKeeper {
+  constructor(host) {
+    this.host = host;
+    this.home = document.documentElement || document.body;
+    this.popoverSupported =
+      typeof host.showPopover === 'function' && typeof host.hidePopover === 'function';
+    this.dialogs = new Map();
+    this.seq = 0;
+    this.syncing = false;
+    this.started = false;
+    this.observer = null;
+    this.onToggle = this.onToggle.bind(this);
+    this.onClose = this.onClose.bind(this);
+    this.onFullscreenChange = this.onFullscreenChange.bind(this);
+    this.onMutations = this.onMutations.bind(this);
+  }
+
+  start() {
+    if (this.started || !this.home) return;
+    this.started = true;
+    for (const [property, value] of Object.entries(HOST_LAYOUT)) {
+      this.host.style.setProperty(property, value);
+    }
+    if (this.popoverSupported) this.host.setAttribute('popover', 'manual');
+    this.adoptDialogs();
+    this.sync(true);
+    document.addEventListener('toggle', this.onToggle, true);
+    document.addEventListener('close', this.onClose, true);
+    document.addEventListener('fullscreenchange', this.onFullscreenChange, true);
+    if (typeof MutationObserver === 'function') {
+      this.observer = new MutationObserver(this.onMutations);
+      this.observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['open', 'popover'],
+      });
+    }
+  }
+
+  isModal(dialog) {
+    if (!isDialogElement(dialog) || !dialog.open || !dialog.isConnected) {
+      return false;
+    }
+    try {
+      return dialog.matches(':modal');
+    } catch {
+      return true;
+    }
+  }
+
+  adoptDialogs() {
+    for (const dialog of document.querySelectorAll('dialog[open]')) {
+      if (this.isModal(dialog) && !this.dialogs.has(dialog)) {
+        this.dialogs.set(dialog, ++this.seq);
+      }
+    }
+  }
+
+  topDialog() {
+    let top = null;
+    let topSeq = -1;
+    for (const [dialog, seq] of this.dialogs) {
+      if (!this.isModal(dialog)) {
+        this.dialogs.delete(dialog);
+        continue;
+      }
+      if (seq > topSeq) {
+        top = dialog;
+        topSeq = seq;
+      }
+    }
+    // Fallback for dialogs opened in a way we did not observe (e.g. before boot).
+    for (const dialog of document.querySelectorAll('dialog[open]')) {
+      if (!this.isModal(dialog) || this.dialogs.has(dialog)) continue;
+      const seq = ++this.seq;
+      this.dialogs.set(dialog, seq);
+      if (seq > topSeq) {
+        top = dialog;
+        topSeq = seq;
+      }
+    }
+    return top;
+  }
+
+  isOpen(target) {
+    if (isDialogElement(target)) return target.open;
+    try {
+      return target.matches(':popover-open');
+    } catch {
+      return false;
+    }
+  }
+
+  onToggle(event) {
+    const target = event.target;
+    if (!(target instanceof Element) || target === this.host) return;
+    const isDialog = isDialogElement(target);
+    const isPopover = !isDialog && target.hasAttribute('popover');
+    if (!isDialog && !isPopover) return;
+    const open = this.isOpen(target);
+    if (isDialog) {
+      if (open) this.dialogs.set(target, ++this.seq);
+      else this.dialogs.delete(target);
+    }
+    if (open) this.sync(true);
+    else if (!isDialog) this.sync(false);
+  }
+
+  onClose(event) {
+    if (!isDialogElement(event.target)) return;
+    this.dialogs.delete(event.target);
+    this.sync(false);
+  }
+
+  onFullscreenChange() {
+    this.sync(true);
+  }
+
+  onMutations(records) {
+    let relevant = !this.host.isConnected;
+    for (const record of records) {
+      if (record.type === 'attributes') {
+        if (
+          isDialogElement(record.target) &&
+          this.isModal(record.target)
+        ) {
+          this.dialogs.set(record.target, ++this.seq);
+          relevant = true;
+        }
+        continue;
+      }
+      for (const node of record.addedNodes) {
+        if (isDialogElement(node) && this.isModal(node)) {
+          this.dialogs.set(node, ++this.seq);
+          relevant = true;
+        }
+      }
+    }
+    if (relevant) this.sync(true);
+  }
+
+  sync(raise) {
+    if (this.syncing || !this.started) return;
+    this.syncing = true;
+    try {
+      const target = document.fullscreenElement || this.topDialog() || this.home;
+      if (!target || target === this.host) return;
+      if (this.host.parentNode !== target) {
+        target.append(this.host);
+        raise = true;
+      }
+      if (raise || !this.isPopoverOpen()) this.showOnTop();
+    } catch (error) {
+      console.warn('[pin-note] overlay guard:', error);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  isPopoverOpen() {
+    if (!this.popoverSupported) return false;
+    try {
+      return this.host.matches(':popover-open');
+    } catch {
+      return false;
+    }
+  }
+
+  showOnTop() {
+    if (!this.popoverSupported) return;
+    try {
+      if (this.host.matches(':popover-open')) this.host.hidePopover();
+    } catch {
+      // Already hidden.
+    }
+    try {
+      this.host.showPopover();
+    } catch (error) {
+      // Never leave the UI hidden behind `[popover]:not(:popover-open)`.
+      this.disablePopover();
+      console.warn('[pin-note] top layer unavailable:', error);
+    }
+  }
+
+  disablePopover() {
+    this.popoverSupported = false;
+    this.host.removeAttribute('popover');
   }
 }
 
@@ -4732,6 +5086,7 @@ async function boot() {
   app.className = 'pn-app';
   app.innerHTML = STATIC_HTML;
   shadow.append(app);
+  new OverlayKeeper(host).start();
   const client = new ReviewClient(host, shadow);
   await client.boot();
 }
