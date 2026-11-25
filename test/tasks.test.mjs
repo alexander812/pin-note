@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ReviewStore } from '../src/store.mjs';
@@ -122,8 +122,14 @@ test('runs the task lifecycle: active, review, closed, next task', async () => {
   const original = (await store.read()).comments.find((comment) => comment.id === first.id);
   assert.equal(original.status, 'resolved');
 
-  const updated = await store.updateTask('T-2', { description: 'Отступы и возврат заголовка' });
+  const updated = await store.updateTask('T-2', {
+    description: 'Отступы и возврат заголовка',
+    context: 'Клиент просит сохранить текущую сетку',
+  });
   assert.equal(updated.description, 'Отступы и возврат заголовка');
+  assert.equal(updated.context, 'Клиент просит сохранить текущую сетку');
+  const persisted = (await store.read()).tasks.find((task) => task.number === 2);
+  assert.equal(persisted.context, 'Клиент просит сохранить текущую сетку');
 
   const deleted = await store.removeTask('T-2');
   assert.equal(deleted.deletedComments, 2);
@@ -531,4 +537,41 @@ test('lets an agent submit a new comment added to a review task', async () => {
   assert.equal(approved.status, 'approved');
   const task = (await store.read()).tasks.find((item) => item.id === submitted.id);
   assert.equal(task.status, 'review');
+});
+
+
+test('stores context and reply attachments and includes them in the brief', async () => {
+  const { store, dataDir } = await makeStore();
+  const comment = await addComment(store, 'Проверь макет');
+  const contextFile = await store.saveAttachment(Buffer.from('context file'), {
+    name: 'brief.txt',
+    type: 'text/plain',
+  });
+  const replyFile = await store.saveAttachment(Buffer.from('reply file'), {
+    name: 'screen.txt',
+    type: 'text/plain',
+  });
+
+  const updated = await store.updateTask(comment.taskId, {
+    context: 'Файлы клиента во вложении',
+    contextAttachments: [contextFile],
+  });
+  assert.equal(updated.contextAttachments.length, 1);
+  assert.equal(updated.contextAttachments[0].file, contextFile.file);
+
+  const replied = await store.reply(comment.id, '', { attachments: [replyFile] });
+  const message = replied.comment.thread.at(-1);
+  assert.equal(message.text, '');
+  assert.equal(message.attachments[0].file, replyFile.file);
+
+  const markdown = await store.exportMarkdown({ task: comment.taskId });
+  assert.match(markdown, /## Контекст задачи/);
+  assert.match(markdown, /Вложения контекста/);
+  assert.match(markdown, /brief\.txt/);
+  assert.match(markdown, /screen\.txt/);
+
+  const cleared = await store.updateTask(comment.taskId, { contextAttachments: [] });
+  assert.equal(cleared.contextAttachments, undefined);
+  await assert.rejects(access(join(dataDir, contextFile.file)));
+  await access(join(dataDir, replyFile.file));
 });

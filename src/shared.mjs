@@ -145,9 +145,9 @@ function markdownLinkText(value) {
   return String(value ?? '').replace(/([\\[\]])/g, '\\$1');
 }
 
-function attachmentLines(attachments) {
+function attachmentLines(attachments, label = 'Файлы') {
   if (!Array.isArray(attachments) || attachments.length === 0) return [];
-  const lines = ['', '**Файлы:**'];
+  const lines = ['', `**${label}:**`];
   for (const attachment of attachments) {
     if (!attachment?.file) continue;
     const name = String(attachment.name || attachment.file);
@@ -171,13 +171,16 @@ function threadLines(thread) {
   const lines = ['', '**Диалог:**'];
   for (const message of thread) {
     const textValue = String(message?.text || '').trim();
-    if (!textValue) continue;
+    const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+    if (!textValue && attachments.length === 0) continue;
     const author =
       message.role === 'agent' ? 'Агент' : message.role === 'system' ? 'Система' : 'Заказчик';
     const at = message.at ? ` · ${message.at}` : '';
     lines.push('', `**${author}${at}:**`, '');
-    for (const line of textValue.split('\n')) lines.push(`> ${line}`);
-    lines.push(...attachmentLines(message.attachments));
+    if (textValue) {
+      for (const line of textValue.split('\n')) lines.push(`> ${line}`);
+    }
+    lines.push(...attachmentLines(attachments));
   }
   return lines;
 }
@@ -284,6 +287,19 @@ export function formatAllMarkdown(comments, meta = {}) {
       `не найдено: ${orphaned.length} · не правим: ${wontfix.length}`
   );
   sections.push('');
+  if (task) {
+    const context = String(task.context || '').trim();
+    const contextAttachments = Array.isArray(task.contextAttachments)
+      ? task.contextAttachments
+      : [];
+    if (context || contextAttachments.length > 0) {
+      sections.push('## Контекст задачи', '');
+      if (context) sections.push(context, '');
+      if (contextAttachments.length > 0) {
+        sections.push(...attachmentLines(contextAttachments, 'Вложения контекста'), '');
+      }
+    }
+  }
   sections.push(
     'Инструкция для агента: разбери открытые и отклонённые комментарии. У отклонённых в поле ' +
       '«Причина отклонения» указано, что нужно доделать. Найди исходники по селектору, тексту, HTML ' +

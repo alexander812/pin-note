@@ -38,17 +38,12 @@ const STATIC_HTML = `
     </button>
     <span class="pn-bar-hint" data-role="hint"></span>
     <span class="pn-bar-spacer"></span>
-    <div class="pn-lang" data-role="lang" role="group" aria-label="Язык интерфейса">
-      <button type="button" data-action="language" data-id="ru" aria-pressed="false" title="Русский" aria-label="Русский">RU</button>
-      <button type="button" data-action="language" data-id="en" aria-pressed="false" title="English" aria-label="English">EN</button>
-    </div>
     <button type="button" class="pn-reload" data-action="reload-site" data-role="reload-site" hidden title="Сайт обновился. Перезагрузить страницу">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Обновить сайт</span>
     </button>
-    <span class="pn-count" data-role="count" hidden aria-live="polite"></span>
     <button type="button" class="pn-compose-action pn-parent-action" data-action="select-parent" data-role="parent-action" hidden aria-label="Выбрать родительский элемент" title="Выбрать родительский элемент">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M7 20h10M12 16V5M7 10l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -60,7 +55,11 @@ const STATIC_HTML = `
         <path d="m14 7 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
       </svg>
     </button>
-    <button type="button" class="pn-panel-toggle" data-action="panel" aria-expanded="false" title="Открыть панель">
+    <div class="pn-lang" data-role="lang" role="group" aria-label="Язык интерфейса">
+      <button type="button" data-action="language" data-id="ru" aria-pressed="false" title="Русский" aria-label="Русский">RU</button>
+      <button type="button" data-action="language" data-id="en" aria-pressed="false" title="English" aria-label="English">EN</button>
+    </div>
+    <button type="button" class="pn-panel-toggle" data-action="panel" aria-expanded="false" aria-label="Открыть панель" title="Открыть панель">
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>
         <path d="M15 4v16" fill="none" stroke="currentColor" stroke-width="1.6"/>
@@ -145,6 +144,62 @@ const STATIC_HTML = `
       </header>
       <section class="pn-fixes" aria-label="Список правок">
         <div class="pn-section-label"><span>Правки</span><span data-role="fix-count"></span></div>
+        <div class="pn-context" data-role="context">
+          <div class="pn-context-empty" data-role="context-empty">
+            <button type="button" class="pn-context-add" data-action="context-add" data-role="context-add">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+              </svg>
+              <span data-role="context-add-label">Добавить контекст</span>
+            </button>
+          </div>
+          <div class="pn-context-editor" data-role="context-editor" hidden>
+            <div class="pn-context-box pn-input-box">
+              <textarea data-role="context-input" rows="2" maxlength="4000" placeholder="Контекст, который получит AI-агент" aria-label="Контекст для AI-агента"></textarea>
+              <div class="pn-field-actions">
+                <button type="button" class="pn-field-attach" data-action="pick-context-files" aria-label="Прикрепить файл" title="Прикрепить файл">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.57 8.57a2 2 0 0 1-2.83-2.83l8.49-8.49" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <button type="button" class="pn-field-icon pn-field-close" data-action="context-cancel" aria-label="Отмена" title="Отмена">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                  </svg>
+                </button>
+                <button type="button" class="pn-field-icon pn-field-save" data-action="context-save" data-role="context-save" aria-label="Сохранить" title="Сохранить" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m5 13 4 4L19 7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+              <input type="file" data-role="context-file-input" multiple hidden>
+            </div>
+            <div class="pn-attachment-list pn-field-attachments" data-role="context-attachments" hidden></div>
+          </div>
+          <div class="pn-context-view" data-role="context-view" hidden>
+            <button type="button" class="pn-context-line" data-action="context-edit" data-role="context-line">
+              <span class="pn-context-text" data-role="context-text"></span>
+            </button>
+            <span class="pn-context-files" data-role="context-files" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.57 8.57a2 2 0 0 1-2.83-2.83l8.49-8.49" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span data-role="context-files-count"></span>
+            </span>
+            <button type="button" class="pn-icon-btn" data-action="context-edit" aria-label="Редактировать контекст" title="Редактировать контекст">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                <path d="m14 7 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <button type="button" class="pn-icon-btn pn-context-delete" data-action="context-delete" data-role="context-delete" aria-label="Удалить контекст" title="Удалить контекст">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M4 7h16M9 7V4.8h6V7M7 7l1 13h8l1-13M10 11v5.5M14 11v5.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
         <div class="pn-fix-list" data-role="fix-list"></div>
       </section>
       <section class="pn-thread" aria-label="Диалог по выбранной правке">
@@ -173,12 +228,21 @@ const STATIC_HTML = `
           </div>
         </div>
         <div class="pn-composer" data-role="composer" hidden>
-          <div class="pn-reply-box">
+          <div class="pn-reply-box pn-input-box">
             <textarea data-role="reply-input" rows="2" maxlength="2000" placeholder="Что уточнить или доделать?" aria-label="Реплика по выбранной правке"></textarea>
-            <button type="button" class="pn-send" data-action="send-reply" data-role="send-reply" aria-label="Отправить реплику" title="Отправить · ⌘ / Ctrl ↵" disabled>
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
+            <div class="pn-field-actions">
+              <button type="button" class="pn-field-attach" data-action="pick-reply-files" aria-label="Прикрепить файл" title="Прикрепить файл">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l8.57-8.57a4 4 0 0 1 5.66 5.66l-8.57 8.57a2 2 0 0 1-2.83-2.83l8.49-8.49" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <button type="button" class="pn-send" data-action="send-reply" data-role="send-reply" aria-label="Отправить реплику" title="Отправить · ⌘ / Ctrl ↵" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <input type="file" data-role="reply-file-input" multiple hidden>
           </div>
+          <div class="pn-attachment-list pn-field-attachments" data-role="reply-attachments" hidden></div>
           <div class="pn-composer-caption">
             <span data-role="reply-context"></span>
             <span class="pn-composer-tools">
@@ -265,6 +329,7 @@ const STATIC_I18N = [
   ['[data-action="compose-selection"]', 'attr:aria-label', 'Написать комментарий'],
   ['[data-action="compose-selection"]', 'attr:title', 'Написать комментарий'],
   ['[data-action="panel"]', 'attr:title', 'Открыть панель'],
+  ['[data-action="panel"]', 'attr:aria-label', 'Открыть панель'],
   ['[data-role="toggle-label"]', 'text', 'Открыть'],
   ['.pn-scrim', 'attr:aria-label', 'Закрыть панель'],
   ['[data-role="panel"]', 'attr:aria-label', 'Задачи PinNote'],
@@ -296,6 +361,22 @@ const STATIC_I18N = [
   ['.pn-confirm-actions [data-action="cancel-confirm"]', 'text', 'Отмена'],
   ['.pn-fixes', 'attr:aria-label', 'Список правок'],
   ['.pn-section-label > span:first-child', 'text', 'Правки'],
+  ['[data-action="context-add"]', 'attr:aria-label', 'Добавить контекст'],
+  ['[data-role="context-add-label"]', 'text', 'Добавить контекст'],
+  ['[data-role="context-input"]', 'attr:placeholder', 'Контекст, который получит AI-агент'],
+  ['[data-role="context-input"]', 'attr:aria-label', 'Контекст для AI-агента'],
+  ['[data-action="pick-context-files"]', 'attr:aria-label', 'Прикрепить файл'],
+  ['[data-action="pick-context-files"]', 'attr:title', 'Прикрепить файл'],
+  ['[data-action="pick-reply-files"]', 'attr:aria-label', 'Прикрепить файл'],
+  ['[data-action="pick-reply-files"]', 'attr:title', 'Прикрепить файл'],
+  ['[data-action="context-save"]', 'attr:aria-label', 'Сохранить'],
+  ['[data-action="context-save"]', 'attr:title', 'Сохранить'],
+  ['.pn-context-editor [data-action="context-cancel"]', 'attr:aria-label', 'Отмена'],
+  ['.pn-context-editor [data-action="context-cancel"]', 'attr:title', 'Отмена'],
+  ['.pn-context-view [data-action="context-edit"]', 'attr:aria-label', 'Редактировать контекст'],
+  ['.pn-context-view [data-action="context-edit"]', 'attr:title', 'Редактировать контекст'],
+  ['[data-action="context-delete"]', 'attr:aria-label', 'Удалить контекст'],
+  ['[data-action="context-delete"]', 'attr:title', 'Удалить контекст'],
   ['.pn-thread', 'attr:aria-label', 'Диалог по выбранной правке'],
   ['.pn-footer .pn-suggestions', 'attr:aria-label', 'Действия по выбранной правке'],
   ['[data-role="accept-label"]', 'text', 'Принять правку'],
@@ -379,9 +460,16 @@ class ReviewClient {
       server: false,
       config: {},
       compose: null,
+      composeDrag: null,
+      contextEditing: false,
+      contextDraft: '',
+      contextTaskId: null,
+      contextAttachments: [],
+      contextBusy: false,
       selected: null,
       pickHintShown: false,
       replyDrafts: {},
+      replyAttachments: {},
       replyOpen: false,
       replyBusy: null,
       editingMessage: null,
@@ -505,7 +593,6 @@ class ReviewClient {
       detailScreen: find('detail-screen'),
       currentTask: find('current-task'),
       hint: find('hint'),
-      count: find('count'),
       reloadSite: find('reload-site'),
       composeAction: find('compose-action'),
       parentAction: find('parent-action'),
@@ -529,6 +616,19 @@ class ReviewClient {
       agentActivity: find('agent-activity'),
       fixList: find('fix-list'),
       fixCount: find('fix-count'),
+      contextEmpty: find('context-empty'),
+      contextAdd: find('context-add'),
+      contextEditor: find('context-editor'),
+      contextInput: find('context-input'),
+      contextSave: find('context-save'),
+      contextView: find('context-view'),
+      contextLine: find('context-line'),
+      contextText: find('context-text'),
+      contextFiles: find('context-files'),
+      contextFilesCount: find('context-files-count'),
+      contextDelete: find('context-delete'),
+      contextFileInput: find('context-file-input'),
+      contextAttachments: find('context-attachments'),
       threadTitle: find('thread-title'),
       fixState: find('fix-state'),
       messages: find('messages'),
@@ -542,6 +642,8 @@ class ReviewClient {
       replyInput: find('reply-input'),
       sendReply: find('send-reply'),
       replyContext: find('reply-context'),
+      replyAttachments: find('reply-attachments'),
+      replyFileInput: find('reply-file-input'),
       taskAction: find('task-action'),
       taskActionButton: find('task-action-button'),
       taskActionIcon: find('task-action-icon'),
@@ -587,6 +689,8 @@ class ReviewClient {
       this.host.addEventListener(type, (event) => event.stopPropagation());
     }
 
+    this.refs.popover.addEventListener('pointerdown', (event) => this.startPopoverDrag(event));
+
     this.app.addEventListener('click', (event) => {
       const target = event.target.closest?.('[data-action]');
       if (!target || !this.app.contains(target)) {
@@ -613,6 +717,11 @@ class ReviewClient {
         this.refs.saveButton.disabled = !target.value.trim();
         return;
       }
+      if (target === this.refs.contextInput) {
+        this.state.contextDraft = target.value;
+        this.updateContextSaveState();
+        return;
+      }
       if (target?.matches?.('[data-role="edit-input"]')) {
         if (this.state.editingMessage) {
           this.state.editingMessage.draft = target.value;
@@ -625,16 +734,19 @@ class ReviewClient {
       if (target === this.refs.replyInput) {
         const key = this.replyDraftKey();
         if (key) this.state.replyDrafts[key] = target.value;
-        const empty = !target.value.trim() || this.viewedTask()?.status === 'closed';
-        this.refs.sendReply.disabled = empty;
+        this.updateReplySendState();
         this.scheduleUiSave();
       }
     });
 
     this.app.addEventListener('change', (event) => {
-      if (event.target !== this.refs.fileInput) return;
-      this.addComposeFiles([...(event.target.files || [])]);
-      event.target.value = '';
+      const target = event.target;
+      const files = [...(target.files || [])];
+      if (target === this.refs.fileInput) this.addComposeFiles(files);
+      else if (target === this.refs.contextFileInput) this.addContextFiles(files);
+      else if (target === this.refs.replyFileInput) this.addReplyFiles(files);
+      else return;
+      target.value = '';
     });
 
     this.app.addEventListener('keydown', (event) => {
@@ -656,6 +768,19 @@ class ReviewClient {
                 ? items.length - 1
                 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
           items[next].focus();
+        }
+        return;
+      }
+      if (target === this.refs.contextInput) {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          this.cancelTaskContextEdit();
+          return;
+        }
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          this.saveTaskContext();
         }
         return;
       }
@@ -1225,6 +1350,7 @@ class ReviewClient {
     const task = this.findTask(taskId);
     if (!task) return;
     this.rememberReply();
+    this.resetTaskContextEdit();
     this.state.taskMenuOpen = false;
     this.state.confirmAction = '';
     this.state.replyOpen = false;
@@ -1253,6 +1379,7 @@ class ReviewClient {
 
   backToTasks() {
     this.rememberReply();
+    this.resetTaskContextEdit();
     this.state.replyOpen = false;
     this.state.editingMessage = null;
     this.state.viewedTaskId = null;
@@ -1275,22 +1402,52 @@ class ReviewClient {
     return `${fix.taskId}/${fix.id}`;
   }
 
+  replyAttachmentsFor(key) {
+    if (!key) return [];
+    if (!Array.isArray(this.state.replyAttachments[key])) {
+      this.state.replyAttachments[key] = [];
+    }
+    return this.state.replyAttachments[key];
+  }
+
+  currentReplyAttachments() {
+    return this.replyAttachmentsFor(this.replyDraftKey());
+  }
+
+  clearReplyAttachments(key = this.replyDraftKey()) {
+    const list = key ? this.state.replyAttachments[key] : null;
+    if (!list) return;
+    for (const attachment of list) {
+      if (attachment?.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
+    delete this.state.replyAttachments[key];
+  }
+
+  updateReplySendState() {
+    if (!this.refs.sendReply) return;
+    const text = this.refs.replyInput?.value.trim() || '';
+    const attachments = this.currentReplyAttachments();
+    this.refs.sendReply.disabled =
+      (!text && attachments.length === 0) || this.viewedTask()?.status === 'closed';
+  }
+
   fillReply() {
     const key = this.replyDraftKey();
     if (!key) return;
     this.refs.replyInput.value = this.state.replyDrafts[key] || '';
-    const empty = !this.refs.replyInput.value.trim() || this.viewedTask()?.status === 'closed';
-    this.refs.sendReply.disabled = empty;
+    this.updateReplySendState();
   }
 
   finishReply(key) {
     delete this.state.replyDrafts[key];
+    this.clearReplyAttachments(key);
     if (this.replyDraftKey() !== key) {
       this.scheduleUiSave();
       return;
     }
     this.state.replyOpen = false;
     if (this.refs.replyInput) this.refs.replyInput.value = '';
+    this.renderReplyAttachments();
     this.saveUiState();
   }
 
@@ -1360,6 +1517,14 @@ class ReviewClient {
       event.stopImmediatePropagation();
       this.state.taskMenuOpen = false;
       this.renderPanel();
+      return;
+    }
+    // While the new-fix panel is open, clicks on the page must not close it
+    // or retarget it. Only Cancel / Escape close the panel.
+    if (this.state.compose && event.button === 0 && !this.isUiEvent(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
       return;
     }
     if (!this.state.mode || event.button !== 0 || this.isUiEvent(event)) return;
@@ -1838,6 +2003,7 @@ class ReviewClient {
       this.state.replyOpen = false;
       this.state.editingMessage = null;
       this.state.editingId = null;
+      this.resetTaskContextEdit();
     }
     this.refs.panel.hidden = !this.state.panel;
     this.refs.panel.setAttribute('aria-hidden', String(!this.state.panel));
@@ -1846,6 +2012,7 @@ class ReviewClient {
     this.refs.panelButton.title = this.state.panel
       ? this.t('Свернуть панель')
       : this.t('Открыть панель');
+    this.refs.panelButton.setAttribute('aria-label', this.refs.panelButton.title);
     this.refs.toggleLabel.textContent = this.state.panel ? this.t('Закрыть') : this.t('Открыть');
     this.updatePageOffsets();
     this.updateScrim();
@@ -1853,7 +2020,6 @@ class ReviewClient {
     this.schedulePins();
     this.scheduleHighlight();
     if (this.state.panel) this.renderPanel();
-    this.updateCounts();
     this.saveUiState();
     if (!this.state.panel) this.maybeReload();
   }
@@ -1940,6 +2106,7 @@ class ReviewClient {
   }
 
   openCompose(element, event, anchorOverride = null) {
+    this.cancelPopoverDrag();
     this.clearScreenshot();
     this.clearComposeAttachments();
     this.state.selected = null;
@@ -2014,16 +2181,21 @@ class ReviewClient {
     if (this.refs.fileInput) this.refs.fileInput.value = '';
   }
 
-  addComposeFiles(files) {
-    const compose = this.state.compose;
-    if (!compose || files.length === 0) return;
-    const maxFiles = Number(this.state.config?.capabilities?.maxAttachments) || 10;
-    const maxBytes = Number(this.state.config?.capabilities?.maxAttachmentBytes) || 32 * 1024 * 1024;
-    if (!Array.isArray(compose.attachments)) compose.attachments = [];
+  attachmentLimits() {
+    return {
+      maxFiles: Number(this.state.config?.capabilities?.maxAttachments) || 10,
+      maxBytes:
+        Number(this.state.config?.capabilities?.maxAttachmentBytes) || 32 * 1024 * 1024,
+    };
+  }
+
+  addAttachmentFiles(files, list) {
+    if (!Array.isArray(list) || files.length === 0) return 0;
+    const { maxFiles, maxBytes } = this.attachmentLimits();
     let added = 0;
     let tooBig = 0;
     for (const file of files) {
-      if (compose.attachments.length >= maxFiles) {
+      if (list.length >= maxFiles) {
         this.toast(
           this.t('Можно прикрепить не больше {count} файлов', { count: maxFiles }),
           'error'
@@ -2035,7 +2207,7 @@ class ReviewClient {
         continue;
       }
       const isImage = this.attachmentIsImage({ name: file.name, type: file.type });
-      compose.attachments.push({
+      list.push({
         file,
         name: file.name || 'file',
         type: file.type || 'application/octet-stream',
@@ -2052,15 +2224,46 @@ class ReviewClient {
         'error'
       );
     }
+    return added;
+  }
+
+  announceAttachmentsAdded(added) {
+    if (added <= 0) return;
+    this.toast(
+      added === 1
+        ? this.t('Файл прикреплён')
+        : this.t('Прикреплено файлов: {count}', { count: added })
+    );
+  }
+
+  addComposeFiles(files) {
+    const compose = this.state.compose;
+    if (!compose || files.length === 0) return;
+    if (!Array.isArray(compose.attachments)) compose.attachments = [];
+    const added = this.addAttachmentFiles(files, compose.attachments);
     this.renderComposeAttachments();
     if (added > 0) {
-      this.toast(
-        added === 1
-          ? this.t('Файл прикреплён')
-          : this.t('Прикреплено файлов: {count}', { count: added })
-      );
+      this.announceAttachmentsAdded(added);
       this.positionPopover(this.state.compose.element);
     }
+  }
+
+  addContextFiles(files) {
+    if (!this.state.contextEditing || files.length === 0) return;
+    const added = this.addAttachmentFiles(files, this.state.contextAttachments);
+    this.renderContextAttachments();
+    this.updateContextSaveState();
+    this.announceAttachmentsAdded(added);
+  }
+
+  addReplyFiles(files) {
+    const key = this.replyDraftKey();
+    if (!key || files.length === 0) return;
+    const list = this.replyAttachmentsFor(key);
+    const added = this.addAttachmentFiles(files, list);
+    this.renderReplyAttachments();
+    this.updateReplySendState();
+    this.announceAttachmentsAdded(added);
   }
 
   removeComposeAttachment(index) {
@@ -2072,19 +2275,60 @@ class ReviewClient {
     this.positionPopover(compose.element);
   }
 
+  removeContextAttachment(index) {
+    const [removed] = this.state.contextAttachments.splice(index, 1);
+    if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    this.renderContextAttachments();
+    this.updateContextSaveState();
+  }
+
+  removeReplyAttachment(index) {
+    const list = this.currentReplyAttachments();
+    const [removed] = list.splice(index, 1);
+    if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    this.renderReplyAttachments();
+    this.updateReplySendState();
+  }
+
   renderComposeAttachments() {
-    const container = this.refs.composeAttachments;
+    this.renderAttachmentChips(
+      this.refs.composeAttachments,
+      this.state.compose?.attachments || [],
+      'remove-compose-attachment'
+    );
+  }
+
+  renderContextAttachments() {
+    this.renderAttachmentChips(
+      this.refs.contextAttachments,
+      this.state.contextAttachments || [],
+      'remove-context-attachment'
+    );
+  }
+
+  renderReplyAttachments() {
+    this.renderAttachmentChips(
+      this.refs.replyAttachments,
+      this.currentReplyAttachments(),
+      'remove-reply-attachment'
+    );
+  }
+
+  renderAttachmentChips(container, attachments, action) {
     if (!container) return;
-    const attachments = this.state.compose?.attachments || [];
     container.replaceChildren();
     container.hidden = attachments.length === 0;
     attachments.forEach((attachment, index) => {
       const chip = document.createElement('div');
       chip.className = 'pn-attachment-chip';
       chip.title = `${attachment.name} · ${this.formatBytes(attachment.size)}`;
-      if (attachment.previewUrl) {
+      const uploaded = typeof attachment.file === 'string';
+      const preview =
+        attachment.previewUrl ||
+        (uploaded && this.attachmentIsImage(attachment) ? this.attachmentUrl(attachment) : '');
+      if (preview) {
         const image = document.createElement('img');
-        image.src = attachment.previewUrl;
+        image.src = preview;
         image.alt = attachment.name;
         image.addEventListener('load', () => {
           attachment.width = image.naturalWidth || 0;
@@ -2103,7 +2347,7 @@ class ReviewClient {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'pn-icon-btn pn-attachment-remove';
-      remove.dataset.action = 'remove-compose-attachment';
+      remove.dataset.action = action;
       remove.dataset.id = String(index);
       remove.setAttribute('aria-label', this.t('Убрать {name}', { name: attachment.name }));
       remove.title = this.t('Убрать файл');
@@ -2480,6 +2724,79 @@ class ReviewClient {
     return data.screenshot;
   }
 
+  startPopoverDrag(event) {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    const target = event.target;
+    if (target instanceof Element) {
+      const control = target.closest(
+        'button, a, input, textarea, select, label, [contenteditable=""], [contenteditable="true"]'
+      );
+      if (control) return;
+    }
+    const popover = this.refs.popover;
+    if (!popover || popover.hidden) return;
+    const rect = popover.getBoundingClientRect();
+    const drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      moved: false,
+    };
+    drag.onMove = (moveEvent) => this.onPopoverDragMove(moveEvent, drag);
+    drag.onEnd = (endEvent) => this.finishPopoverDrag(endEvent, drag);
+    this.state.composeDrag = drag;
+    popover.classList.add('is-dragging');
+    try {
+      popover.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort; window listeners still track the drag.
+    }
+    window.addEventListener('pointermove', drag.onMove, true);
+    window.addEventListener('pointerup', drag.onEnd, true);
+    window.addEventListener('pointercancel', drag.onEnd, true);
+    event.preventDefault();
+  }
+
+  onPopoverDragMove(event, drag) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+    drag.moved = true;
+    const margin = 8;
+    const maxLeft = Math.max(margin, innerWidth - drag.width - margin);
+    const maxTop = Math.max(margin, innerHeight - drag.height - margin);
+    const left = Math.min(maxLeft, Math.max(margin, drag.left + dx));
+    const top = Math.min(maxTop, Math.max(margin, drag.top + dy));
+    this.refs.popover.style.left = `${Math.round(left)}px`;
+    this.refs.popover.style.top = `${Math.round(top)}px`;
+    event.preventDefault();
+  }
+
+  finishPopoverDrag(event, drag) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    this.cancelPopoverDrag();
+  }
+
+  cancelPopoverDrag() {
+    const drag = this.state.composeDrag;
+    if (!drag) return;
+    window.removeEventListener('pointermove', drag.onMove, true);
+    window.removeEventListener('pointerup', drag.onEnd, true);
+    window.removeEventListener('pointercancel', drag.onEnd, true);
+    try {
+      this.refs.popover.releasePointerCapture?.(drag.pointerId);
+    } catch {
+      // The pointer may already be released.
+    }
+    this.state.composeDrag = null;
+    this.refs.popover.classList.remove('is-dragging');
+  }
+
   positionPopover(element) {
     const rect = element.isConnected ? element.getBoundingClientRect() : null;
     const fallback = this.state.compose?.anchor?.rect;
@@ -2528,6 +2845,7 @@ class ReviewClient {
 
   closeCompose({ reload = true } = {}) {
     if (!this.state.compose) return;
+    this.cancelPopoverDrag();
     this.clearScreenshot();
     this.clearComposeAttachments();
     this.state.compose = null;
@@ -3105,33 +3423,11 @@ class ReviewClient {
   }
 
   renderAll() {
-    this.updateCounts();
     this.updateServerNote();
     this.renderBar();
     this.renderPanelIfOpen();
     this.schedulePins();
     this.scheduleHighlight();
-  }
-
-  updateCounts() {
-    const task = this.currentTask();
-    const fixes = task ? this.taskFixes(task.id) : [];
-    const pending = fixes.filter((fix) => fix.status === 'review').length;
-    const working = fixes.filter((fix) => ['open', 'rejected', 'orphaned'].includes(fix.status)).length;
-    const attention = pending + working;
-    this.refs.count.hidden = attention === 0;
-    this.refs.count.textContent = attention > 0 ? String(attention) : '';
-    const details = [];
-    if (pending > 0) details.push(this.t('{count} к проверке', { count: pending }));
-    if (working > 0) details.push(this.t('{count} в работе', { count: working }));
-    this.refs.count.title = details.join(' · ') || this.t('Нет активных правок');
-    this.refs.count.classList.toggle('is-review', pending > 0);
-    this.refs.panelButton.setAttribute(
-      'aria-label',
-      this.state.panel
-        ? this.t('Свернуть панель задач, {count} требуют внимания', { count: attention })
-        : this.t('Открыть панель задач, {count} требуют внимания', { count: attention })
-    );
   }
 
   updateServerNote() {
@@ -3152,7 +3448,6 @@ class ReviewClient {
 
   renderPanel() {
     this.normalizeSelection();
-    this.updateCounts();
     this.updateServerNote();
     this.renderBar();
     const viewed = this.viewedTask();
@@ -3185,6 +3480,7 @@ class ReviewClient {
     this.refs.panelButton.title = this.state.panel
       ? this.t('Свернуть панель')
       : this.t('Открыть панель');
+    this.refs.panelButton.setAttribute('aria-label', this.refs.panelButton.title);
     this.refs.toggleLabel.textContent = this.state.panel ? this.t('Закрыть') : this.t('Открыть');
     this.renderSelectionActions();
     this.updateReloadNotice();
@@ -3339,6 +3635,7 @@ class ReviewClient {
     this.renderConfirm(task);
     this.renderAgentState(task);
     this.renderFixes(task, selected);
+    this.renderTaskContext(task);
     this.refs.fixState.hidden = true;
     if (selected) {
       this.renderFixState(task, selected);
@@ -3491,6 +3788,221 @@ class ReviewClient {
     this.refs.fixList
       .querySelector('[aria-pressed="true"]')
       ?.scrollIntoView({ block: 'nearest' });
+  }
+
+  taskContextValue(task) {
+    return String(task?.context || '').trim();
+  }
+
+  taskContextAttachments(task) {
+    return Array.isArray(task?.contextAttachments) ? task.contextAttachments : [];
+  }
+
+  updateContextSaveState() {
+    if (!this.refs.contextSave) return;
+    this.refs.contextSave.disabled =
+      this.state.contextBusy ||
+      (!this.state.contextDraft.trim() && this.state.contextAttachments.length === 0);
+  }
+
+  renderTaskContext(task) {
+    const value = this.taskContextValue(task);
+    const attachments = this.taskContextAttachments(task);
+    const hasContext = Boolean(value) || attachments.length > 0;
+    const editing = Boolean(this.state.contextEditing) && this.state.contextTaskId === task?.id;
+    this.refs.contextAdd.disabled = this.state.contextBusy;
+    this.refs.contextDelete.disabled = this.state.contextBusy;
+    this.refs.contextEmpty.hidden = editing || hasContext;
+    this.refs.contextEditor.hidden = !editing;
+    this.refs.contextView.hidden = editing || !hasContext;
+    this.refs.contextFiles.hidden = attachments.length === 0;
+    this.refs.contextFilesCount.textContent = String(attachments.length);
+    this.refs.contextFiles.title = attachments
+      .map((attachment) => attachment.name)
+      .filter(Boolean)
+      .join(', ');
+    this.refs.fixList
+      ?.closest('.pn-fixes')
+      ?.classList.toggle('is-context-editing', editing);
+    if (editing) {
+      if (this.refs.contextInput.value !== this.state.contextDraft) {
+        this.refs.contextInput.value = this.state.contextDraft;
+      }
+      this.renderContextAttachments();
+      this.updateContextSaveState();
+      return;
+    }
+    const lineText = value
+      ? value.replace(/\s+/g, ' ').trim()
+      : attachments.map((attachment) => attachment.name).filter(Boolean).join(', ');
+    this.refs.contextText.textContent = lineText;
+    this.refs.contextLine.title = [value, ...attachments.map((attachment) => attachment.name)]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  startTaskContextEdit() {
+    const task = this.viewedTask();
+    if (!task || this.state.contextBusy) return;
+    this.state.contextEditing = true;
+    this.state.contextTaskId = task.id;
+    this.state.contextDraft = this.taskContextValue(task);
+    this.clearContextAttachments();
+    this.state.contextAttachments = this.taskContextAttachments(task).map((attachment) => ({
+      ...attachment,
+    }));
+    this.renderTaskContext(task);
+    requestAnimationFrame(() => {
+      const input = this.refs.contextInput;
+      if (!input || this.refs.contextEditor.hidden) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
+  cancelTaskContextEdit() {
+    if (!this.state.contextEditing) return;
+    this.resetTaskContextEdit();
+    const task = this.viewedTask();
+    if (!task) return;
+    this.renderTaskContext(task);
+    const hasContext =
+      Boolean(this.taskContextValue(task)) || this.taskContextAttachments(task).length > 0;
+    const focusTarget =
+      hasContext && !this.refs.contextView.hidden ? this.refs.contextLine : this.refs.contextAdd;
+    requestAnimationFrame(() => focusTarget?.focus());
+  }
+
+  clearContextAttachments() {
+    for (const attachment of this.state.contextAttachments) {
+      if (attachment?.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    }
+    this.state.contextAttachments = [];
+    if (this.refs.contextAttachments) {
+      this.refs.contextAttachments.replaceChildren();
+      this.refs.contextAttachments.hidden = true;
+    }
+  }
+
+  resetTaskContextEdit() {
+    this.state.contextEditing = false;
+    this.state.contextTaskId = null;
+    this.state.contextDraft = '';
+    this.clearContextAttachments();
+  }
+
+  attachmentPayload(attachment) {
+    const payload = {
+      file: attachment.file,
+      name: attachment.name,
+      type: attachment.type,
+      size: attachment.size,
+    };
+    if (Number(attachment.width) > 0) payload.width = Math.round(attachment.width);
+    if (Number(attachment.height) > 0) payload.height = Math.round(attachment.height);
+    return payload;
+  }
+
+  async uploadAttachmentsForContext() {
+    const uploaded = [];
+    for (const attachment of this.state.contextAttachments) {
+      if (typeof attachment.file === 'string' || !attachment.file) {
+        uploaded.push(this.attachmentPayload(attachment));
+      } else {
+        const saved = await this.uploadAttachment(attachment);
+        if (saved) uploaded.push(saved);
+      }
+    }
+    return uploaded;
+  }
+
+  async saveTaskContext() {
+    const task = this.viewedTask();
+    if (!task || this.state.contextBusy || !this.state.contextEditing) return;
+    if (this.state.contextTaskId !== task.id) return;
+    const value = this.state.contextDraft.replace(/\r\n?/g, '\n').trim();
+    const attachments = this.state.contextAttachments;
+    if (!value && attachments.length === 0) return;
+    const hasNewFiles = attachments.some(
+      (attachment) => attachment?.file && typeof attachment.file !== 'string'
+    );
+    if (hasNewFiles && !this.state.server) {
+      this.toast(this.t('Файлы доступны только с review-сервером'), 'error');
+      return;
+    }
+    this.state.contextBusy = true;
+    this.renderTaskContext(task);
+    try {
+      const uploadedAttachments = attachments.length > 0
+        ? await this.uploadAttachmentsForContext()
+        : [];
+      let saved = null;
+      if (this.state.server) {
+        const data = await this.api(`/tasks/${encodeURIComponent(task.id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            context: value,
+            contextAttachments: uploadedAttachments,
+          }),
+        });
+        saved = data?.task || null;
+      }
+      const target = this.findTask(saved?.id || task.id) || task;
+      if (saved) {
+        Object.assign(target, saved);
+        if (!Array.isArray(saved.contextAttachments)) delete target.contextAttachments;
+      } else {
+        target.context = value;
+        if (uploadedAttachments.length > 0) target.contextAttachments = uploadedAttachments;
+        else delete target.contextAttachments;
+        target.updatedAt = new Date().toISOString();
+      }
+      this.resetTaskContextEdit();
+      if (!this.state.server) this.saveLocal();
+      this.toast(this.t('Контекст сохранён'));
+    } catch (err) {
+      this.toast(err.message || this.t('Не удалось сохранить контекст'), 'error');
+    } finally {
+      this.state.contextBusy = false;
+      const current = this.viewedTask();
+      if (current) this.renderTaskContext(current);
+    }
+  }
+
+  async deleteTaskContext() {
+    const task = this.viewedTask();
+    if (!task || this.state.contextBusy) return;
+    if (!this.taskContextValue(task) && this.taskContextAttachments(task).length === 0) return;
+    this.state.contextBusy = true;
+    this.renderTaskContext(task);
+    try {
+      let saved = null;
+      if (this.state.server) {
+        const data = await this.api(`/tasks/${encodeURIComponent(task.id)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ context: '', contextAttachments: [] }),
+        });
+        saved = data?.task || null;
+      }
+      const target = this.findTask(saved?.id || task.id) || task;
+      if (saved) {
+        Object.assign(target, saved);
+        if (!Array.isArray(saved.contextAttachments)) delete target.contextAttachments;
+      } else {
+        target.context = '';
+        delete target.contextAttachments;
+        target.updatedAt = new Date().toISOString();
+      }
+      this.resetTaskContextEdit();
+      if (!this.state.server) this.saveLocal();
+      this.toast(this.t('Контекст удалён'));
+    } catch (err) {
+      this.toast(err.message || this.t('Не удалось удалить контекст'), 'error');
+    } finally {
+      this.state.contextBusy = false;
+      const current = this.viewedTask();
+      if (current) this.renderTaskContext(current);
+    }
   }
 
   renderFixState(task, fix) {
@@ -3774,6 +4286,7 @@ class ReviewClient {
     if (!open) {
       if (this.state.replyOpen) this.rememberReply();
       if (this.refs.replyInput) this.refs.replyInput.value = '';
+      if (this.refs.replyAttachments) this.refs.replyAttachments.hidden = true;
       return;
     }
     const toAgent = this.agentEnabled();
@@ -3783,6 +4296,7 @@ class ReviewClient {
         name: this.fixName(fix),
       }) + (toAgent ? this.t(' · ОТВЕТ УЙДЁТ АГЕНТУ') : '');
     this.fillReply();
+    this.renderReplyAttachments();
     this.refs.sendReply.title = toAgent
       ? this.t('Отправить агенту · ⌘ / Ctrl ↵')
       : this.t('Отправить · ⌘ / Ctrl ↵');
@@ -4049,9 +4563,14 @@ class ReviewClient {
     const text = String(
       this.refs.replyInput?.value ?? this.state.replyDrafts[key] ?? ''
     ).trim();
-    if (!text) {
-      this.toast(this.t('Напишите ответ'), 'error');
+    const attachments = this.replyAttachmentsFor(key);
+    if (!text && attachments.length === 0) {
+      this.toast(this.t('Напишите ответ или прикрепите файл'), 'error');
       this.refs.replyInput?.focus();
+      return;
+    }
+    if (attachments.length > 0 && !this.state.server) {
+      this.toast(this.t('Файлы доступны только с review-сервером'), 'error');
       return;
     }
     if (this.state.replyBusy) return;
@@ -4060,9 +4579,18 @@ class ReviewClient {
     this.refs.sendReply.disabled = true;
     try {
       if (this.state.server) {
+        const uploadedAttachments = [];
+        for (const attachment of attachments) {
+          const uploaded = await this.uploadAttachment(attachment);
+          if (uploaded) uploadedAttachments.push(uploaded);
+        }
         const data = await this.api(`/comments/${encodeURIComponent(comment.id)}/messages`, {
           method: 'POST',
-          body: JSON.stringify({ text, dispatchAgent: toAgent }),
+          body: JSON.stringify({
+            text,
+            attachments: uploadedAttachments,
+            dispatchAgent: toAgent,
+          }),
         });
         if (data?.agent) this.applyAgentEvent(data.agent);
         this.finishReply(key);
@@ -4295,11 +4823,23 @@ class ReviewClient {
       case 'pick-files':
         this.refs.fileInput?.click();
         break;
+      case 'pick-context-files':
+        this.refs.contextFileInput?.click();
+        break;
+      case 'pick-reply-files':
+        this.refs.replyFileInput?.click();
+        break;
       case 'remove-screenshot':
         this.clearScreenshot();
         break;
       case 'remove-compose-attachment':
         this.removeComposeAttachment(Number(id));
+        break;
+      case 'remove-context-attachment':
+        this.removeContextAttachment(Number(id));
+        break;
+      case 'remove-reply-attachment':
+        this.removeReplyAttachment(Number(id));
         break;
       case 'annotator-color':
         this.setAnnotatorColor(color);
@@ -4316,6 +4856,19 @@ class ReviewClient {
         break;
       case 'annotator-attach':
         await this.attachAnnotation();
+        break;
+      case 'context-add':
+      case 'context-edit':
+        this.startTaskContextEdit();
+        break;
+      case 'context-cancel':
+        this.cancelTaskContextEdit();
+        break;
+      case 'context-save':
+        await this.saveTaskContext();
+        break;
+      case 'context-delete':
+        await this.deleteTaskContext();
         break;
       case 'save':
         await this.saveDraft();

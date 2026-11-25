@@ -113,6 +113,14 @@ test('runs each PinNote task in its own agent session and reworks rejected comme
   assert.equal(created.response.status, 201);
   const commentId = created.body.comment.id;
 
+  const contextPatch = await json('/__review/tasks/T-1', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context: 'Бренд: строгий B2B, без эмодзи' }),
+  });
+  assert.equal(contextPatch.response.status, 200);
+  assert.equal(contextPatch.body.task.context, 'Бренд: строгий B2B, без эмодзи');
+
   const dispatched = await json('/__review/tasks/T-1/agent', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -128,6 +136,8 @@ test('runs each PinNote task in its own agent session and reworks rejected comme
   assert.equal(initial.mode, 'initial');
   assert.match(initial.prompt, /T-1/);
   assert.match(initial.prompt, /Поправь заголовок/);
+  assert.match(initial.prompt, /## Контекст задачи/);
+  assert.match(initial.prompt, /Бренд: строгий B2B, без эмодзи/);
   assert.match(initial.prompt, /AGENT\.md/);
 
   const stored = await waitFor(async () => {

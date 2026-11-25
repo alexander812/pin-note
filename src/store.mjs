@@ -270,11 +270,12 @@ function sanitizeTask(raw, fallbackNumber = 1, fallbackCreatedAt = null) {
   const id = text(raw.id, 120) || newTaskId();
   const parsedNumber = Math.round(number(raw.number, fallbackNumber, 1, 1e9));
   const status = TASK_STATUSES.includes(raw.status) ? raw.status : 'active';
-  return {
+  const task = {
     id,
     number: parsedNumber,
     status,
     description: shortDescription(raw.description, 120),
+    context: text(raw.context, 4000).trim(),
     createdAt: timestamp(raw.createdAt, fallbackCreatedAt || new Date().toISOString()),
     updatedAt: timestamp(raw.updatedAt, null),
     submittedAt: timestamp(raw.submittedAt, null),
@@ -283,6 +284,9 @@ function sanitizeTask(raw, fallbackNumber = 1, fallbackCreatedAt = null) {
     agentProvider: text(raw.agentProvider, 80) || null,
     agentUpdatedAt: timestamp(raw.agentUpdatedAt, null),
   };
+  const contextAttachments = sanitizeAttachments(raw.contextAttachments);
+  if (contextAttachments.length > 0) task.contextAttachments = contextAttachments;
+  return task;
 }
 
 function taskCreatedAtForComments(comments) {
@@ -1056,7 +1060,7 @@ export class ReviewStore {
     });
   }
 
-  reply(id, textValue) {
+  reply(id, textValue, { attachments: rawAttachments = [] } = {}) {
     return this.enqueue(async () => {
       const store = await this.read();
       const comment = store.comments.find((item) => item.id === id);
@@ -1067,18 +1071,25 @@ export class ReviewStore {
         throw error('Задача закрыта. Верните комментарий в текущую задачу', 409);
       }
       const replyText = text(textValue, 5000).trim();
-      if (!replyText) throw error('Ответ не может быть пустым', 400);
+      const attachments = sanitizeAttachments(rawAttachments);
+      if (!replyText && attachments.length === 0) {
+        throw error('Ответ не может быть пустым', 400);
+      }
 
       const now = new Date().toISOString();
-      pushThreadMessage(comment, {
+      const message = {
         role: 'user',
         kind: 'reply',
         text: replyText,
         at: now,
-      });
+      };
+      if (attachments.length > 0) message.attachments = attachments;
+      pushThreadMessage(comment, message);
 
       if (['review', 'approved', 'rejected'].includes(comment.status)) {
-        applyCommentStatus(comment, 'rejected', { at: now, rejectionReason: replyText });
+        const reason =
+          replyText || attachments.map((attachment) => attachment.name).join(', ');
+        applyCommentStatus(comment, 'rejected', { at: now, rejectionReason: reason });
       } else if (comment.status !== 'open') {
         applyCommentStatus(comment, 'open', { at: now });
         comment.resolution = '';
@@ -1165,10 +1176,41 @@ export class ReviewStore {
       const store = await this.read();
       const task = findTaskIn(store, ref);
       if (!task) throw error('Задача не найдена', 404);
-      if (patch?.description === undefined) throw error('Нет полей для обновления', 400);
-      task.description = shortDescription(patch.description, 120);
+      const hasDescription = patch?.description !== undefined;
+      const hasContext = patch?.context !== undefined;
+      const hasContextAttachments = patch?.contextAttachments !== undefined;
+      if (!hasDescription && !hasContext && !hasContextAttachments) {
+        throw error('Нет полей для обновления', 400);
+      }
+      const previousContextFiles = (task.contextAttachments || [])
+        .map((attachment) => attachment.file)
+        .filter(Boolean);
+      if (hasDescription) {
+        task.description = shortDescription(patch.description, 120);
+      }
+      if (hasContext) {
+        task.context = text(patch.context, 4000).trim();
+      }
+      if (hasContextAttachments) {
+        const attachments = sanitizeAttachments(patch.contextAttachments);
+        if (attachments.length > 0) task.contextAttachments = attachments;
+        else delete task.contextAttachments;
+      }
       task.updatedAt = new Date().toISOString();
       await this.write(store);
+      for (const file of previousContextFiles) {
+        if ((task.contextAttachments || []).some((item) => item.file === file)) continue;
+        const stillUsed =
+          store.comments.some((comment) => commentAttachmentFiles(comment).includes(file)) ||
+          store.tasks.some((item) =>
+            (item.contextAttachments || []).some((attachment) => attachment.file === file)
+          );
+        if (stillUsed) continue;
+        if (file.startsWith('attachments/')) {
+          const attachment = this.resolveAttachment(basename(file));
+          if (attachment) await unlink(attachment).catch(() => {});
+        }
+      }
       return taskSummary(task, store.comments);
     });
   }
@@ -1322,15 +1364,22 @@ export class ReviewStore {
         if (comment.screenshot?.file) files.add(comment.screenshot.file);
         for (const file of commentAttachmentFiles(comment)) files.add(file);
       }
+      for (const attachment of task.contextAttachments || []) {
+        if (attachment?.file) files.add(attachment.file);
+      }
       store.comments = store.comments.filter((comment) => comment.taskId !== task.id);
       store.tasks = store.tasks.filter((item) => item.id !== task.id);
       if (store.activeTaskId === task.id) store.activeTaskId = null;
       await this.write(store);
       for (const file of files) {
-        const stillUsed = store.comments.some(
-          (comment) =>
-            comment.screenshot?.file === file || commentAttachmentFiles(comment).includes(file)
-        );
+        const stillUsed =
+          store.comments.some(
+            (comment) =>
+              comment.screenshot?.file === file || commentAttachmentFiles(comment).includes(file)
+          ) ||
+          store.tasks.some((item) =>
+            (item.contextAttachments || []).some((attachment) => attachment.file === file)
+          );
         if (stillUsed) continue;
         if (file.startsWith('screenshots/')) {
           const screenshot = this.resolveScreenshot(basename(file));

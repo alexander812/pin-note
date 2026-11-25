@@ -1044,7 +1044,9 @@ export async function createReviewServer(options = {}) {
         return;
       }
       const id = decodeURIComponent(replyRoute[1]);
-      const result = await store.reply(id, body.text ?? body.message);
+      const result = await store.reply(id, body.text ?? body.message, {
+        attachments: body.attachments,
+      });
       let agent = null;
       if (body.dispatchAgent && agentRunner?.enabled) {
         const state = await store.read();

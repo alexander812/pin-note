@@ -425,3 +425,79 @@ test('forwards taskId to the store and rejects comments for a closed task', asyn
     await rm(isolatedRoot, { recursive: true, force: true });
   }
 });
+
+test('stores task context and includes it in the AI brief', async () => {
+  const created = await createComment('Учти контекст бренда');
+  assert.equal(created.response.status, 201);
+  const taskId = created.body.task.id;
+
+  const patched = await json(`/__review/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context: 'B2B-лендинг, строгий тон, без эмодзи' }),
+  });
+  assert.equal(patched.response.status, 200);
+  assert.equal(patched.body.task.context, 'B2B-лендинг, строгий тон, без эмодзи');
+
+  const state = await json('/__review/state');
+  assert.equal(
+    state.body.tasks.find((task) => task.id === taskId).context,
+    'B2B-лендинг, строгий тон, без эмодзи'
+  );
+
+  const exported = await fetch(
+    `${base}/__review/export.md?task=${encodeURIComponent(taskId)}`
+  );
+  assert.equal(exported.status, 200);
+  const markdown = await exported.text();
+  assert.match(markdown, /## Контекст задачи/);
+  assert.match(markdown, /B2B-лендинг, строгий тон, без эмодзи/);
+
+  const cleared = await json(`/__review/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ context: '' }),
+  });
+  assert.equal(cleared.response.status, 200);
+  assert.equal(cleared.body.task.context, '');
+});
+
+test('uploads context and reply attachments through the review API', async () => {
+  const created = await createComment('Приложи файл к правке');
+  assert.equal(created.response.status, 201);
+  const upload = await fetch(
+    `${base}/__review/attachments?name=note.txt&type=text%2Fplain`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: 'attachment body',
+    }
+  );
+  assert.equal(upload.status, 201);
+  const uploaded = (await upload.json()).attachment;
+  assert.match(uploaded.file, /^attachments\//);
+
+  const patched = await json(`/__review/tasks/${encodeURIComponent(created.body.task.id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      context: 'Файл клиента',
+      contextAttachments: [uploaded],
+    }),
+  });
+  assert.equal(patched.response.status, 200);
+  assert.equal(patched.body.task.contextAttachments[0].file, uploaded.file);
+
+  const replied = await json(
+    `/__review/comments/${encodeURIComponent(created.body.comment.id)}/messages`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '', attachments: [uploaded], dispatchAgent: false }),
+    }
+  );
+  assert.equal(replied.response.status, 200);
+  const message = replied.body.comment.thread.at(-1);
+  assert.equal(message.text, '');
+  assert.equal(message.attachments[0].file, uploaded.file);
+});
