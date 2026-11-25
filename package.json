@@ -1,6 +1,6 @@
 {
   "name": "pin-note",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "PinNote — local visual review layer that turns website comments into structured feedback for an AI coding agent.",
   "type": "module",
   "bin": {
